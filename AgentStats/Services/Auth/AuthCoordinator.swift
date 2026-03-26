@@ -325,17 +325,23 @@ final class AuthCoordinator: ObservableObject {
               let idToken = tokens["id_token"] as? String else {
             return nil
         }
-        // Decode JWT payload (second segment)
+        // Decode JWT payload (second segment, URL-safe base64)
         let parts = idToken.split(separator: ".")
         guard parts.count >= 2 else { return nil }
+        // Convert URL-safe base64 to standard base64
         var base64 = String(parts[1])
-        // Pad base64
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        // Pad to multiple of 4
         while base64.count % 4 != 0 { base64 += "=" }
         guard let payloadData = Data(base64Encoded: base64),
               let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+            AppLogger.log("[AuthCoordinator] Failed to decode Codex JWT")
             return nil
         }
-        return payload["email"] as? String ?? payload["name"] as? String
+        let email = payload["email"] as? String ?? payload["name"] as? String
+        AppLogger.log("[AuthCoordinator] Codex JWT email: \(email ?? "nil")")
+        return email
     }
 
     // MARK: Private helpers

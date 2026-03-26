@@ -78,8 +78,11 @@ struct AgentStatsApp: App {
 
         // Kick off initial refresh + auto-refresh on launch.
         let orch = orchestrator
+        let mgr = accountManager
         Task {
             AppLogger.log("[AgentStatsApp] Starting initial refresh (\(snapshot.activeAccounts.count) active account(s))")
+            // Resolve any missing account labels at startup
+            await Self.resolveDefaultLabels(accounts: snapshot.activeAccounts, manager: mgr)
             await orch.requestRefresh()
             await orch.startAutoRefresh(interval: 300) // 5 minutes
         }
@@ -115,4 +118,46 @@ struct AgentStatsApp: App {
         }
     }
 
+    // MARK: - Label resolution
+
+    private static func resolveDefaultLabels(accounts: [RegisteredAccount], manager: AccountManager) async {
+        for account in accounts {
+            let service = account.key.serviceType
+            let label = account.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty && label != service.displayName { continue }
+
+            var resolved: String?
+            switch service {
+            case .codex:
+                resolved = decodeCodexEmail()
+            case .gemini:
+                resolved = GeminiUsageProvider.readLocalEmail()
+            default:
+                break
+            }
+
+            if let label = resolved {
+                await manager.updateLabel(for: account.key, label: label)
+                AppLogger.log("[AgentStatsApp] Resolved label for \(service): \(label)")
+            }
+        }
+    }
+
+    private static func decodeCodexEmail() -> String? {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/auth.json").path
+        guard let data = FileManager.default.contents(atPath: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = json["tokens"] as? [String: Any],
+              let idToken = tokens["id_token"] as? String else { return nil }
+        let parts = idToken.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var base64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64 += "=" }
+        guard let payloadData = Data(base64Encoded: base64),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else { return nil }
+        return payload["email"] as? String ?? payload["name"] as? String
+    }
 }
