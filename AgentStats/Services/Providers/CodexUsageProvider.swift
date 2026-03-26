@@ -1,35 +1,21 @@
 import Foundation
 
-/// Fetches ChatGPT Codex (OpenAI) quota consumption from the ChatGPT backend
-/// API.
+/// Fetches ChatGPT Codex usage from local session log files.
 ///
-/// Authentication flow:
-/// 1. Session cookies captured via the OAuth WebView login are used to call
-///    `https://chatgpt.com/api/auth/session`, which returns a short-lived
-///    access token in its JSON body.
-/// 2. That access token is then forwarded as a Bearer token in the
-///    `Authorization` header when calling the WHAM usage endpoint.
+/// Uses the AgentBar approach: reads `~/.codex/sessions/` JSONL files
+/// to compute token usage and rate limit status locally, without
+/// requiring WebView JavaScript injection or API calls.
 ///
-/// This avoids relying on `WKNavigationDelegate` response-header interception
-/// (which cannot reliably capture bearer tokens) and mirrors the approach used
-/// by the Claude provider.
-///
-/// Implements `QuotaWindowProvider` (usage window) and
-/// `CredentialRequired` (OAuth via chatgpt.com).
+/// Falls back to the ChatGPT web API via stored cookies if local files
+/// are not available (e.g. user doesn't have the Codex CLI installed).
 struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
-
-    // MARK: Protocol requirements
 
     let account: AccountKey
     var serviceType: ServiceType { account.serviceType }
     let authMethod: AuthMethod = .oauthWebView(loginURL: URL(string: "https://chatgpt.com")!)
 
-    // MARK: Dependencies
-
     private let credentialStore: CredentialStore
     private let apiClient: APIClient
-
-    // MARK: Init
 
     init(account: AccountKey, credentialStore: CredentialStore, apiClient: APIClient = .shared) {
         self.account = account
@@ -37,209 +23,252 @@ struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
         self.apiClient = apiClient
     }
 
-    // MARK: UsageProviderProtocol
-
     func isConfigured() async -> Bool {
+        // Configured if we have local auth.json OR local session files OR stored credentials
+        if readCodexAuthToken() != nil { return true }
+        if hasLocalSessionFiles() { return true }
         guard let credential = await credentialStore.load(for: account) else { return false }
         return !credential.isExpired && !credential.needsReauth
     }
 
-    // MARK: QuotaWindowProvider
-
     func fetchQuotaWindows() async throws -> [QuotaWindow] {
+        AppLogger.log("[CodexProvider] fetchQuotaWindows START")
+
+        // Strategy 1: Read access_token from ~/.codex/auth.json (most reliable)
+        if let token = readCodexAuthToken() {
+            AppLogger.log("[CodexProvider] Got token from ~/.codex/auth.json")
+            do {
+                let windows = try await fetchUsageWithToken(token)
+                if !windows.isEmpty { return windows }
+            } catch {
+                AppLogger.log("[CodexProvider] API fetch with local token failed: \(error)")
+            }
+        }
+
+        // Strategy 2: Read local session files for token stats
+        if let windows = try? readLocalSessionFiles(), !windows.isEmpty {
+            AppLogger.log("[CodexProvider] Got \(windows.count) window(s) from local files")
+            return windows
+        }
+
+        // Strategy 3: Use stored cookies to call ChatGPT API directly
         guard let credential = await credentialStore.load(for: account) else {
             throw ProviderError.notAuthenticated
         }
 
-        guard !credential.isExpired else {
-            throw ProviderError.notAuthenticated
-        }
-
-        // Step 1 — exchange session cookies for a short-lived access token.
-        let accessToken: String
-        do {
-            accessToken = try await fetchAccessToken(using: credential)
-            AppLogger.log("[CodexProvider] Got access token: \(accessToken.prefix(20))...")
-        } catch {
-            AppLogger.log("[CodexProvider] Token exchange failed: \(error)")
-            throw ProviderError.fetchFailed("Session token exchange failed: \(error.localizedDescription)")
-        }
-
-        // Step 2 — call the WHAM usage endpoint with the access token.
-        let headers = buildHeaders(from: credential, accessToken: accessToken)
-        let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
-
-        do {
-            let raw = try await apiClient.fetchRaw(from: usageURL, headers: headers)
-            return try parseQuotaWindows(from: raw)
-        } catch APIError.unauthorized {
-            throw ProviderError.notAuthenticated
-        } catch let providerError as ProviderError {
-            throw providerError
-        } catch {
-            throw ProviderError.fetchFailed(error.localizedDescription)
-        }
+        let windows = try await fetchViaAPI(credential: credential)
+        return windows
     }
 
-    // MARK: Session token exchange
-
-    /// Calls `https://chatgpt.com/api/auth/session` using only the stored
-    /// session cookies to obtain a short-lived bearer access token.
-    ///
-    /// - Returns: The raw access token string (without the `Bearer ` prefix).
-    /// - Throws: `ProviderError.notAuthenticated` when the session endpoint
-    ///   returns 401, or `ProviderError.parseError` when the response body
-    ///   cannot be decoded.
-    private func fetchAccessToken(using credential: CredentialMaterial) async throws -> String {
-        let sessionURL = URL(string: "https://chatgpt.com/api/auth/session")!
-
-        // Build a cookie-only header set — no Authorization header yet.
-        var sessionHeaders: [String: String] = [:]
-        let cookieHeader = credential.httpCookies()
-            .map { "\($0.name)=\($0.value)" }
-            .joined(separator: "; ")
-        if !cookieHeader.isEmpty {
-            sessionHeaders["Cookie"] = cookieHeader
-        }
-        if let userAgent = credential.userAgent {
-            sessionHeaders["User-Agent"] = userAgent
-        } else {
-            sessionHeaders["User-Agent"] = "AgentStats/1.0 macOS"
-        }
-        sessionHeaders["Accept"] = "application/json"
-        sessionHeaders["Referer"] = "https://chatgpt.com/"
-
-        let raw = try await apiClient.fetchRaw(from: sessionURL, headers: sessionHeaders)
-
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let sessionResponse = try decoder.decode(ChatGPTSessionResponse.self, from: raw)
-
-        guard let token = sessionResponse.accessToken, !token.isEmpty else {
-            throw ProviderError.notAuthenticated
+    /// Reads the access token from `~/.codex/auth.json`
+    private func readCodexAuthToken() -> String? {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/auth.json").path
+        guard let data = FileManager.default.contents(atPath: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = json["tokens"] as? [String: Any],
+              let token = tokens["access_token"] as? String,
+              !token.isEmpty else {
+            return nil
         }
         return token
     }
 
-    // MARK: Private helpers
+    /// Fetches usage from ChatGPT WHAM API using a bearer token
+    private func fetchUsageWithToken(_ token: String) async throws -> [QuotaWindow] {
+        var headers: [String: String] = [
+            "Authorization": "Bearer \(token)",
+            "Accept": "application/json",
+            "User-Agent": "AgentStats/1.0",
+            "Referer": "https://chatgpt.com/"
+        ]
 
-    /// Builds headers for the WHAM usage endpoint.
-    ///
-    /// - Parameters:
-    ///   - credential:   Stored credential material (cookies, user-agent).
-    ///   - accessToken:  Short-lived bearer token obtained from the session endpoint.
-    private func buildHeaders(
-        from credential: CredentialMaterial,
-        accessToken: String
-    ) -> [String: String] {
+        let url = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+        let data = try await apiClient.fetchRaw(from: url, headers: headers)
+        let preview = String(data: data.prefix(500), encoding: .utf8) ?? ""
+        AppLogger.log("[CodexProvider] WHAM response: \(preview)")
+        return parseUsageResponse(data)
+    }
+
+    // MARK: - Strategy 1: Local session files
+
+    private func hasLocalSessionFiles() -> Bool {
+        let paths = codexSessionPaths()
+        return paths.contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    private func codexSessionPaths() -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "\(home)/.codex/sessions",
+            "\(home)/.codex",
+            "\(home)/.config/codex/sessions"
+        ]
+    }
+
+    private func readLocalSessionFiles() throws -> [QuotaWindow] {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+
+        // Look for session JSONL files
+        let sessionDirs = [
+            "\(home)/.codex/sessions",
+            "\(home)/.codex"
+        ]
+
+        var totalInputTokens = 0
+        var totalOutputTokens = 0
+        var sessionCount = 0
+        let today = Calendar.current.startOfDay(for: Date())
+
+        for dir in sessionDirs {
+            guard fm.fileExists(atPath: dir) else { continue }
+
+            let files: [String]
+            do {
+                files = try fm.contentsOfDirectory(atPath: dir)
+            } catch { continue }
+
+            for file in files where file.hasSuffix(".jsonl") || file.hasSuffix(".json") {
+                let path = "\(dir)/\(file)"
+
+                // Only count today's files
+                if let attrs = try? fm.attributesOfItem(atPath: path),
+                   let modDate = attrs[.modificationDate] as? Date,
+                   modDate >= today {
+
+                    if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                        let lines = content.components(separatedBy: .newlines)
+                        for line in lines where !line.isEmpty {
+                            if let data = line.data(using: .utf8),
+                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                                // Count tokens from usage entries
+                                if let usage = json["usage"] as? [String: Any] {
+                                    totalInputTokens += usage["input_tokens"] as? Int ?? usage["prompt_tokens"] as? Int ?? 0
+                                    totalOutputTokens += usage["completion_tokens"] as? Int ?? usage["output_tokens"] as? Int ?? 0
+                                }
+                                // Count sessions
+                                if json["type"] as? String == "session_start" || json["event"] as? String == "start" {
+                                    sessionCount += 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let totalTokens = totalInputTokens + totalOutputTokens
+        AppLogger.log("[CodexProvider] Local files: \(totalTokens) tokens (\(totalInputTokens) in, \(totalOutputTokens) out), \(sessionCount) session(s)")
+
+        if totalTokens > 0 || sessionCount > 0 {
+            // Estimate usage based on typical Codex Plus limits
+            // ChatGPT Plus: ~80 messages/3h window, Pro: unlimited
+            let estimatedLimit = 500_000  // rough daily token limit
+            let pct = min(1.0, Double(totalTokens) / Double(estimatedLimit))
+            return [
+                QuotaWindow(
+                    id: "daily",
+                    label: "Today (\(formatTokens(totalTokens)) tokens)",
+                    usedPercentage: pct,
+                    resetAt: Calendar.current.date(byAdding: .day, value: 1, to: today)
+                )
+            ]
+        }
+
+        return []
+    }
+
+    private func formatTokens(_ count: Int) -> String {
+        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
+        if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000) }
+        return "\(count)"
+    }
+
+    // MARK: - Strategy 2: API via cookies
+
+    private func fetchViaAPI(credential: CredentialMaterial) async throws -> [QuotaWindow] {
+        AppLogger.log("[CodexProvider] Trying API with cookies...")
+
         var headers: [String: String] = [:]
-
-        // Use the access token obtained from the session API as the bearer token.
-        headers["Authorization"] = "Bearer \(accessToken)"
-
-        // Session cookies provide additional anti-CSRF protection.
         let cookieHeader = credential.httpCookies()
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
-        if !cookieHeader.isEmpty {
-            headers["Cookie"] = cookieHeader
-        }
-
-        if let userAgent = credential.userAgent {
-            headers["User-Agent"] = userAgent
-        } else {
-            headers["User-Agent"] = "AgentStats/1.0 macOS"
-        }
-
+        if !cookieHeader.isEmpty { headers["Cookie"] = cookieHeader }
+        if let ua = credential.userAgent { headers["User-Agent"] = ua }
+        else { headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" }
         headers["Accept"] = "application/json"
-        headers["Content-Type"] = "application/json"
-        // Required by the ChatGPT backend to distinguish API requests from browser navigations.
         headers["Referer"] = "https://chatgpt.com/"
-        headers["Origin"] = "https://chatgpt.com"
 
-        return headers
-    }
+        // Try to get session token from the session endpoint
+        let sessionEndpoints = [
+            "https://chatgpt.com/api/auth/session",
+            "https://chatgpt.com/backend-api/auth/session"
+        ]
 
-    private func parseQuotaWindows(from data: Data) throws -> [QuotaWindow] {
-        // ChatGPT WHAM usage API response shape (approximate):
-        // {
-        //   "usage": {
-        //     "codex": {
-        //       "used": 12,
-        //       "limit": 50,
-        //       "reset_at": "2025-01-28T00:00:00Z"
-        //     }
-        //   }
-        // }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .iso8601
-
-        do {
-            let envelope = try decoder.decode(WHAMUsageEnvelope.self, from: data)
-            return envelope.toQuotaWindows()
-        } catch {
-            throw ProviderError.parseError(error.localizedDescription)
-        }
-    }
-}
-
-// MARK: - Response models (private)
-
-/// Minimal representation of the `/api/auth/session` response from chatgpt.com.
-/// Only the `accessToken` field is needed; other fields are ignored.
-private struct ChatGPTSessionResponse: Decodable {
-    /// Short-lived JWT or opaque bearer token. `nil` when the session is invalid
-    /// or the user is not authenticated.
-    let accessToken: String?
-}
-
-private struct WHAMUsageEnvelope: Decodable {
-    struct PlanUsage: Decodable {
-        let used: Int?
-        let limit: Int?
-        let resetAt: Date?
-    }
-
-    struct UsageContainer: Decodable {
-        let codex: PlanUsage?
-        // Some accounts surface usage under `o3` or `o4-mini` keys;
-        // map the generic key for forward-compat.
-        let o3: PlanUsage?
-        let o4Mini: PlanUsage?
-
-        enum CodingKeys: String, CodingKey {
-            case codex
-            case o3
-            case o4Mini = "o4-mini"
-        }
-    }
-
-    let usage: UsageContainer?
-
-    func toQuotaWindows() -> [QuotaWindow] {
-        // Prefer explicit codex bucket; fall back to o3 / o4-mini.
-        let planUsage = usage?.codex ?? usage?.o3 ?? usage?.o4Mini
-
-        guard let plan = planUsage,
-              let used = plan.used,
-              let limit = plan.limit,
-              limit > 0 else {
-            // Return a zero-usage placeholder so the row is visible.
-            return [QuotaWindow(
-                id: "codex-window",
-                label: "Usage",
-                usedPercentage: 0,
-                resetAt: nil
-            )]
+        var accessToken: String?
+        for endpoint in sessionEndpoints {
+            do {
+                let data = try await apiClient.fetchRaw(from: URL(string: endpoint)!, headers: headers)
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    accessToken = json["accessToken"] as? String ?? json["access_token"] as? String
+                    if accessToken != nil {
+                        AppLogger.log("[CodexProvider] Got token from \(endpoint)")
+                        break
+                    }
+                }
+            } catch {
+                AppLogger.log("[CodexProvider] \(endpoint) failed: \(error.localizedDescription)")
+            }
         }
 
-        let percentage = min(1.0, Double(used) / Double(limit))
-        return [QuotaWindow(
-            id: "codex-window",
-            label: "Usage",
-            usedPercentage: percentage,
-            resetAt: plan.resetAt
-        )]
+        // If we got a token, fetch usage
+        if let token = accessToken {
+            var usageHeaders = headers
+            usageHeaders["Authorization"] = "Bearer \(token)"
+            do {
+                let data = try await apiClient.fetchRaw(from: URL(string: "https://chatgpt.com/backend-api/wham/usage")!, headers: usageHeaders)
+                let preview = String(data: data.prefix(300), encoding: .utf8) ?? ""
+                AppLogger.log("[CodexProvider] Usage response: \(preview)")
+                return parseUsageResponse(data)
+            } catch {
+                AppLogger.log("[CodexProvider] Usage fetch failed: \(error)")
+            }
+        }
+
+        // No token available — return placeholder
+        AppLogger.log("[CodexProvider] No access token obtained")
+        return [QuotaWindow(id: "codex", label: "Usage (sign in required)", usedPercentage: 0, resetAt: nil)]
+    }
+
+    private func parseUsageResponse(_ data: Data) -> [QuotaWindow] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [QuotaWindow(id: "codex", label: "Usage", usedPercentage: 0, resetAt: nil)]
+        }
+
+        var windows: [QuotaWindow] = []
+        let isoFormatter = ISO8601DateFormatter()
+        let isoFractional = ISO8601DateFormatter()
+        isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        for (key, val) in json {
+            if let bucket = val as? [String: Any],
+               let util = bucket["utilization"] as? Double {
+                let pct = util > 1.0 ? util / 100.0 : util
+                let resetStr = bucket["resets_at"] as? String ?? bucket["reset_at"] as? String
+                let resetDate = resetStr.flatMap { isoFractional.date(from: $0) ?? isoFormatter.date(from: $0) }
+                windows.append(QuotaWindow(
+                    id: key,
+                    label: key.replacingOccurrences(of: "_", with: " ").capitalized,
+                    usedPercentage: pct,
+                    resetAt: resetDate
+                ))
+            }
+        }
+
+        if windows.isEmpty {
+            windows.append(QuotaWindow(id: "codex", label: "Usage", usedPercentage: 0, resetAt: nil))
+        }
+        return windows
     }
 }

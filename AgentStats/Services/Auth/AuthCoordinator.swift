@@ -196,14 +196,20 @@ final class AuthCoordinator: ObservableObject {
                 }
 
             case .codex:
-                // Try /backend-api/me
-                let url = URL(string: "https://chatgpt.com/backend-api/me")!
-                let data = try await apiClient.fetchRaw(from: url, headers: headers)
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    let email = json["email"] as? String
-                    let name = json["name"] as? String
-                    let label = email ?? name ?? key.serviceType.displayName
+                // Try reading email from ~/.codex/auth.json JWT first
+                if let label = readCodexEmailFromAuthJson() {
+                    AppLogger.log("[AuthCoordinator] Resolved Codex label from auth.json: \(label)")
                     await accountManager.updateLabel(for: key, label: label)
+                } else {
+                    // Fallback: try API
+                    let url = URL(string: "https://chatgpt.com/backend-api/me")!
+                    let data = try await apiClient.fetchRaw(from: url, headers: headers)
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let email = json["email"] as? String
+                        let name = json["name"] as? String
+                        let label = email ?? name ?? key.serviceType.displayName
+                        await accountManager.updateLabel(for: key, label: label)
+                    }
                 }
 
             default:
@@ -213,6 +219,29 @@ final class AuthCoordinator: ObservableObject {
             AppLogger.log("[AuthCoordinator] Could not resolve account label: \(error.localizedDescription)")
             // Non-fatal — keep the default label.
         }
+    }
+
+    /// Reads user email from ~/.codex/auth.json by decoding the JWT id_token.
+    private func readCodexEmailFromAuthJson() -> String? {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/auth.json").path
+        guard let data = FileManager.default.contents(atPath: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = json["tokens"] as? [String: Any],
+              let idToken = tokens["id_token"] as? String else {
+            return nil
+        }
+        // Decode JWT payload (second segment)
+        let parts = idToken.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var base64 = String(parts[1])
+        // Pad base64
+        while base64.count % 4 != 0 { base64 += "=" }
+        guard let payloadData = Data(base64Encoded: base64),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+            return nil
+        }
+        return payload["email"] as? String ?? payload["name"] as? String
     }
 
     // MARK: Private helpers

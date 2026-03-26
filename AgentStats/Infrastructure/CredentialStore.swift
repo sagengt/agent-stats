@@ -1,55 +1,63 @@
 import Foundation
 
-/// Actor-based credential store keyed by `AccountKey`.
+/// Credential store backed entirely by UserDefaults.
 ///
-/// `AuthCoordinator` writes credentials; Providers read them.
-/// An in-memory cache avoids redundant Keychain I/O on every provider tick.
+/// Each credential is stored under its own key in UserDefaults.
+/// No in-memory cache — every read goes to UserDefaults, every write
+/// goes to UserDefaults. This eliminates all cache coherency issues.
+///
+/// Key format: "cred2.<serviceType>.<accountId>"
+/// (prefix "cred2" avoids collision with previous implementations)
 actor CredentialStore {
 
-    // MARK: - Dependencies
+    static let shared = CredentialStore()
 
-    private let keychain: KeychainManager
-
-    // MARK: - Init
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
 
     init(keychain: KeychainManager = .shared) {
-        self.keychain = keychain
+        AppLogger.log("[CredentialStore] Initialized")
     }
 
-    // MARK: - Public API
-
     func save(for key: AccountKey, material: CredentialMaterial) async {
-        let storageKey = self.keychainKey(for: key)
+        let udKey = storageKey(for: key)
         do {
-            try keychain.save(material, for: storageKey)
-            AppLogger.log("[CredentialStore] Saved: \(key.serviceType):\(key.accountId.prefix(8))")
+            let data = try encoder.encode(material)
+            UserDefaults.standard.set(data, forKey: udKey)
+            // Force synchronize to ensure write is committed
+            UserDefaults.standard.synchronize()
+            // Verify
+            let check = UserDefaults.standard.data(forKey: udKey)
+            AppLogger.log("[CredentialStore] Saved \(key.serviceType):\(key.accountId.prefix(8)) (\(data.count)b, verify=\(check?.count ?? -1)) key=\(udKey)")
         } catch {
-            AppLogger.log("[CredentialStore] Save FAILED: \(error.localizedDescription)")
+            AppLogger.log("[CredentialStore] Encode failed: \(error)")
         }
     }
 
     func load(for key: AccountKey) async -> CredentialMaterial? {
-        let storageKey = self.keychainKey(for: key)
+        let udKey = storageKey(for: key)
+        guard let data = UserDefaults.standard.data(forKey: udKey) else {
+            return nil
+        }
         do {
-            return try keychain.load(CredentialMaterial.self, for: storageKey)
+            return try decoder.decode(CredentialMaterial.self, from: data)
         } catch {
-            AppLogger.log("[CredentialStore] Load failed: \(error.localizedDescription)")
+            AppLogger.log("[CredentialStore] Decode failed for \(udKey): \(error)")
             return nil
         }
     }
 
     func invalidate(for key: AccountKey) async {
-        let storageKey = self.keychainKey(for: key)
-        do { try keychain.delete(for: storageKey) } catch {}
+        let udKey = storageKey(for: key)
+        UserDefaults.standard.removeObject(forKey: udKey)
+        UserDefaults.standard.synchronize()
     }
 
     func delete(for key: AccountKey) async {
         await invalidate(for: key)
     }
 
-    // MARK: - Private helpers
-
-    private func keychainKey(for key: AccountKey) -> String {
-        "agentstats.credential.\(key.serviceType.rawValue).\(key.accountId)"
+    private func storageKey(for key: AccountKey) -> String {
+        "cred2.\(key.serviceType.rawValue).\(key.accountId)"
     }
 }

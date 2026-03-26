@@ -20,14 +20,19 @@ final class KeychainManager: Sendable {
 
     func save<T: Codable>(_ value: T, for key: String) throws {
         let data = try encode(value)
-        UserDefaults.standard.set(data, forKey: "cred.\(key)")
-        AppLogger.log("[KeychainManager] Saved to UserDefaults: \(key) (\(data.count) bytes)")
+        let udKey = "cred.\(key)"
+        UserDefaults.standard.set(data, forKey: udKey)
+        // Immediate verify
+        let verify = UserDefaults.standard.data(forKey: udKey)
+        AppLogger.log("[KeychainManager] Saved: \(key) (\(data.count) bytes, verify=\(verify?.count ?? -1))")
     }
 
     func load<T: Codable>(_ type: T.Type, for key: String) throws -> T? {
-        if let data = UserDefaults.standard.data(forKey: "cred.\(key)") {
+        let udKey = "cred.\(key)"
+        if let data = UserDefaults.standard.data(forKey: udKey) {
             return try decode(type, from: data)
         }
+        AppLogger.log("[KeychainManager] Load miss: \(udKey)")
         return nil
     }
 

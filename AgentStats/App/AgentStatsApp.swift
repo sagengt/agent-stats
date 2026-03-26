@@ -26,8 +26,7 @@ struct AgentStatsApp: App {
 
     init() {
         // Build infrastructure actors.
-        let keychain = KeychainManager.shared
-        let credentialStore = CredentialStore(keychain: keychain)
+        let credentialStore = CredentialStore.shared
         let resultStore = UsageResultStore()
         let historyStore = UsageHistoryStore()
 
