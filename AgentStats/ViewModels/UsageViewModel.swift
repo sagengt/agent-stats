@@ -152,6 +152,7 @@ final class UsageViewModel: ObservableObject {
             guard let self else { return }
             for await updatedResults in await self.resultStore.resultStream() {
                 guard !Task.isCancelled else { return }
+                AppLogger.log("[ViewModel] Received \(updatedResults.count) result(s)")
                 self.results = updatedResults
                 if let newest = updatedResults.map(\.fetchedAt).max() {
                     self.lastRefreshedAt = newest

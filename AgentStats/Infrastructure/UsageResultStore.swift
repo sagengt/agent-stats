@@ -93,6 +93,7 @@ actor UsageResultStore {
 
     private func broadcast() {
         let snapshot = Array(results.values)
+        AppLogger.log("[UsageResultStore] Broadcasting \(snapshot.count) result(s) to \(subscribers.count) subscriber(s)")
         for subscriber in subscribers.values {
             subscriber.continuation.yield(snapshot)
         }

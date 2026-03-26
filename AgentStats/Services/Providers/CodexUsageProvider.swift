@@ -247,28 +247,43 @@ struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
         }
 
         var windows: [QuotaWindow] = []
-        let isoFormatter = ISO8601DateFormatter()
-        let isoFractional = ISO8601DateFormatter()
-        isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-        for (key, val) in json {
-            if let bucket = val as? [String: Any],
-               let util = bucket["utilization"] as? Double {
-                let pct = util > 1.0 ? util / 100.0 : util
-                let resetStr = bucket["resets_at"] as? String ?? bucket["reset_at"] as? String
-                let resetDate = resetStr.flatMap { isoFractional.date(from: $0) ?? isoFormatter.date(from: $0) }
-                windows.append(QuotaWindow(
-                    id: key,
-                    label: key.replacingOccurrences(of: "_", with: " ").capitalized,
-                    usedPercentage: pct,
-                    resetAt: resetDate
-                ))
+        // Format: { "rate_limit": { "primary_window": { "used_percent": N }, "secondary_window": { ... } } }
+        if let rateLimit = json["rate_limit"] as? [String: Any] {
+            if let primary = rateLimit["primary_window"] as? [String: Any] {
+                let pct = (primary["used_percent"] as? Double ?? 0) / 100.0
+                let resetSecs = primary["reset_after_seconds"] as? Double
+                let resetAt = resetSecs.map { Date().addingTimeInterval($0) }
+                let limitSecs = primary["limit_window_seconds"] as? Int ?? 18000
+                let label = limitSecs == 18000 ? "5 Hour" : "\(limitSecs / 3600)h"
+                windows.append(QuotaWindow(id: "5h", label: label, usedPercentage: pct, resetAt: resetAt))
+            }
+            if let secondary = rateLimit["secondary_window"] as? [String: Any] {
+                let pct = (secondary["used_percent"] as? Double ?? 0) / 100.0
+                let resetSecs = secondary["reset_after_seconds"] as? Double
+                let resetAt = resetSecs.map { Date().addingTimeInterval($0) }
+                let limitSecs = secondary["limit_window_seconds"] as? Int ?? 604800
+                let label = limitSecs == 604800 ? "Weekly" : "\(limitSecs / 86400)d"
+                windows.append(QuotaWindow(id: "weekly", label: label, usedPercentage: pct, resetAt: resetAt))
+            }
+        }
+
+        // Fallback: top-level utilization fields
+        if windows.isEmpty {
+            for (key, val) in json {
+                if let bucket = val as? [String: Any],
+                   let util = bucket["utilization"] as? Double {
+                    let pct = util > 1.0 ? util / 100.0 : util
+                    windows.append(QuotaWindow(id: key, label: key.replacingOccurrences(of: "_", with: " ").capitalized, usedPercentage: pct, resetAt: nil))
+                }
             }
         }
 
         if windows.isEmpty {
             windows.append(QuotaWindow(id: "codex", label: "Usage", usedPercentage: 0, resetAt: nil))
         }
+
+        AppLogger.log("[CodexProvider] Parsed \(windows.count) window(s): \(windows.map { "\($0.id):\(Int($0.usedPercentage*100))%" }.joined(separator: ", "))")
         return windows
     }
 }
