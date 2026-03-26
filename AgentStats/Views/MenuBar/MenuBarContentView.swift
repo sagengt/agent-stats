@@ -4,13 +4,25 @@ import SwiftUI
 
 /// The dropdown content shown when the user clicks the AgentStats menu bar icon.
 ///
-/// Renders a compact list of service rows, action buttons, and the standard
-/// Settings / Quit items. Conforms to the macOS Human Interface Guidelines for
-/// menu bar utilities.
+/// Renders a compact list of service rows grouped by service type, with
+/// per-account labels shown when a service has multiple accounts. Conforms
+/// to the macOS Human Interface Guidelines for menu bar utilities.
 struct MenuBarContentView: View {
 
     @EnvironmentObject var viewModel: UsageViewModel
     @EnvironmentObject var authCoordinator: AuthCoordinator
+
+    @AppStorage(MenuBarDisplayModeKey.userDefaultsKey)
+    private var displayModeRaw: String = MenuBarDisplayMode.label.rawValue
+
+    @State private var showingDetailPopover = false
+
+    private var displayMode: Binding<MenuBarDisplayMode> {
+        Binding(
+            get: { MenuBarDisplayMode(rawValue: displayModeRaw) ?? .label },
+            set: { displayModeRaw = $0.rawValue; MenuBarDisplayModeKey.save($0) }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,8 +31,13 @@ struct MenuBarContentView: View {
 
             Divider()
 
-            // Service rows
+            // Service rows grouped by service type
             serviceListView
+
+            Divider()
+
+            // Display mode selector
+            displayModeSectionView
 
             Divider()
 
@@ -28,7 +45,11 @@ struct MenuBarContentView: View {
             actionView
         }
         .padding(.vertical, 4)
-        .frame(minWidth: 280)
+        .frame(minWidth: 300)
+        .popover(isPresented: $showingDetailPopover, arrowEdge: .trailing) {
+            DetailPopoverView()
+                .environmentObject(viewModel)
+        }
     }
 
     // MARK: Subviews
@@ -82,10 +103,16 @@ struct MenuBarContentView: View {
             .padding(.vertical, 4)
         } else {
             VStack(alignment: .leading, spacing: 2) {
-                ForEach(viewModel.results) { result in
-                    ServiceRowView(result: result)
+                ForEach(viewModel.resultsByService, id: \.serviceType) { group in
+                    let showAccountLabel = group.results.count > 1
+                    ForEach(group.results) { result in
+                        ServiceRowView(
+                            result: result,
+                            accountLabel: showAccountLabel ? viewModel.label(for: result.accountKey) : nil
+                        )
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
+                    }
                 }
             }
             .padding(.vertical, 4)
@@ -93,8 +120,35 @@ struct MenuBarContentView: View {
     }
 
     @ViewBuilder
+    private var displayModeSectionView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Menu Bar Style")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+
+            MenuBarDisplayModePicker(selection: displayMode)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
+        }
+    }
+
+    @ViewBuilder
     private var actionView: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Show Details
+            Button {
+                showingDetailPopover = true
+            } label: {
+                Label("Show Details", systemImage: "chart.bar.doc.horizontal")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .disabled(viewModel.results.isEmpty)
+
             Button {
                 viewModel.refresh()
             } label: {
@@ -135,10 +189,15 @@ struct MenuBarContentView: View {
 
 // MARK: - ServiceRowView
 
-/// A single horizontal row summarising usage for one AI coding service.
+/// A single horizontal row summarising usage for one AI coding service account.
+///
+/// When `accountLabel` is non-nil it is displayed below the service name to
+/// distinguish multiple accounts registered for the same service.
 struct ServiceRowView: View {
 
     let result: ServiceUsageResult
+    /// Optional human-readable label shown when a service has multiple accounts.
+    var accountLabel: String?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -148,10 +207,20 @@ struct ServiceRowView: View {
                 .font(.system(size: 13))
                 .frame(width: 16)
 
-            // Service name
-            Text(result.serviceType.shortName)
-                .font(.system(size: 12, weight: .medium))
-                .frame(minWidth: 50, alignment: .leading)
+            // Service name + optional account label
+            VStack(alignment: .leading, spacing: 1) {
+                Text(result.serviceType.shortName)
+                    .font(.system(size: 12, weight: .medium))
+
+                if let label = accountLabel {
+                    Text(label)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .frame(minWidth: 50, alignment: .leading)
 
             Spacer()
 

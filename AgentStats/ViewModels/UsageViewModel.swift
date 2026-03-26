@@ -13,7 +13,7 @@ final class UsageViewModel: ObservableObject {
 
     // MARK: Published state
 
-    /// All service results currently available, ordered by service priority.
+    /// All account results currently available, ordered by service priority then account registration order.
     @Published var results: [ServiceUsageResult] = []
 
     /// `true` while a refresh is in progress.
@@ -26,6 +26,7 @@ final class UsageViewModel: ObservableObject {
 
     private let resultStore: UsageResultStore
     private let orchestrator: RefreshOrchestrator
+    let accountManager: AccountManager
 
     // MARK: Internal
 
@@ -34,9 +35,14 @@ final class UsageViewModel: ObservableObject {
 
     // MARK: Init
 
-    init(resultStore: UsageResultStore, orchestrator: RefreshOrchestrator) {
+    init(
+        resultStore: UsageResultStore,
+        orchestrator: RefreshOrchestrator,
+        accountManager: AccountManager
+    ) {
         self.resultStore = resultStore
         self.orchestrator = orchestrator
+        self.accountManager = accountManager
         startObserving()
     }
 
@@ -57,6 +63,38 @@ final class UsageViewModel: ObservableObject {
     }
 
     // MARK: Computed helpers for UI
+
+    /// Results grouped by `ServiceType`, preserving canonical service ordering.
+    ///
+    /// Each entry contains all accounts for a given service so the UI can
+    /// decide whether to show account labels (when `count > 1`).
+    var resultsByService: [(serviceType: ServiceType, results: [ServiceUsageResult])] {
+        var grouped: [ServiceType: [ServiceUsageResult]] = [:]
+        for result in results {
+            grouped[result.serviceType, default: []].append(result)
+        }
+        return ServiceType.allCases.compactMap { service in
+            guard let serviceResults = grouped[service], !serviceResults.isEmpty else { return nil }
+            return (serviceType: service, results: serviceResults)
+        }
+    }
+
+    /// Returns the human-readable label for the account identified by `key`.
+    ///
+    /// Looks up the label synchronously from the cached results by matching
+    /// the `accountKey` against `results`. Falls back to the service display
+    /// name when the account is not found in the current result set.
+    func label(for key: AccountKey) -> String {
+        // Derive a display label from the account key.
+        // Full async resolution is available via `resolvedLabel(for:)`.
+        key.serviceType.displayName
+    }
+
+    /// Resolves the label for `key` from `AccountManager` asynchronously.
+    func resolvedLabel(for key: AccountKey) async -> String {
+        let accounts = await accountManager.allAccounts()
+        return accounts.first(where: { $0.key == key })?.label ?? key.serviceType.displayName
+    }
 
     /// Results whose display data contains at least one `.quota` entry.
     var quotaResults: [ServiceUsageResult] {

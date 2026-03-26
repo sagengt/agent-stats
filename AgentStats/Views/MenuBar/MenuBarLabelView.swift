@@ -25,10 +25,12 @@ struct MenuBarLabelView: View {
             }
         } else if !results.isEmpty {
             // Results exist but none have quota windows (e.g. token/activity-only services).
+            // Show the unique service count across all accounts.
+            let serviceCount = Set(results.map(\.serviceType)).count
             Label {
-                Text(results.count == 1
+                Text(serviceCount == 1
                      ? results[0].serviceType.shortName
-                     : "\(results.count)")
+                     : "\(serviceCount)")
             } icon: {
                 Image(systemName: "chart.bar.fill")
             }

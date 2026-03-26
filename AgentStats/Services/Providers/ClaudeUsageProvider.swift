@@ -9,7 +9,8 @@ struct ClaudeUsageProvider: QuotaWindowProvider, CredentialRequired {
 
     // MARK: Protocol requirements
 
-    let serviceType: ServiceType = .claude
+    let account: AccountKey
+    var serviceType: ServiceType { account.serviceType }
     let authMethod: AuthMethod = .oauthWebView(loginURL: URL(string: "https://claude.ai")!)
 
     // MARK: Dependencies
@@ -19,7 +20,8 @@ struct ClaudeUsageProvider: QuotaWindowProvider, CredentialRequired {
 
     // MARK: Init
 
-    init(credentialStore: CredentialStore, apiClient: APIClient = .shared) {
+    init(account: AccountKey, credentialStore: CredentialStore, apiClient: APIClient = .shared) {
+        self.account = account
         self.credentialStore = credentialStore
         self.apiClient = apiClient
     }
@@ -27,14 +29,14 @@ struct ClaudeUsageProvider: QuotaWindowProvider, CredentialRequired {
     // MARK: UsageProviderProtocol
 
     func isConfigured() async -> Bool {
-        guard let credential = await credentialStore.load(for: .claude) else { return false }
+        guard let credential = await credentialStore.load(for: account) else { return false }
         return !credential.isExpired && !credential.needsReauth
     }
 
     // MARK: QuotaWindowProvider
 
     func fetchQuotaWindows() async throws -> [QuotaWindow] {
-        guard let credential = await credentialStore.load(for: .claude) else {
+        guard let credential = await credentialStore.load(for: account) else {
             throw ProviderError.notAuthenticated
         }
 

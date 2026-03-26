@@ -20,7 +20,8 @@ struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
 
     // MARK: Protocol requirements
 
-    let serviceType: ServiceType = .codex
+    let account: AccountKey
+    var serviceType: ServiceType { account.serviceType }
     let authMethod: AuthMethod = .oauthWebView(loginURL: URL(string: "https://chatgpt.com")!)
 
     // MARK: Dependencies
@@ -30,7 +31,8 @@ struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
 
     // MARK: Init
 
-    init(credentialStore: CredentialStore, apiClient: APIClient = .shared) {
+    init(account: AccountKey, credentialStore: CredentialStore, apiClient: APIClient = .shared) {
+        self.account = account
         self.credentialStore = credentialStore
         self.apiClient = apiClient
     }
@@ -38,14 +40,14 @@ struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
     // MARK: UsageProviderProtocol
 
     func isConfigured() async -> Bool {
-        guard let credential = await credentialStore.load(for: .codex) else { return false }
+        guard let credential = await credentialStore.load(for: account) else { return false }
         return !credential.isExpired && !credential.needsReauth
     }
 
     // MARK: QuotaWindowProvider
 
     func fetchQuotaWindows() async throws -> [QuotaWindow] {
-        guard let credential = await credentialStore.load(for: .codex) else {
+        guard let credential = await credentialStore.load(for: account) else {
             throw ProviderError.notAuthenticated
         }
 

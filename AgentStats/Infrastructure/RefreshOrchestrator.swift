@@ -9,11 +9,18 @@ import Foundation
 ///   runs as soon as the current one completes.
 /// - This prevents unbounded queuing while ensuring the most recent request
 ///   is always serviced.
+///
+/// Quiescence:
+/// - `quiesceAccount(_:)` marks an `AccountKey` so that any result produced
+///   for that key by an in-flight fetch is silently discarded, and the key is
+///   excluded from subsequent refresh cycles.
+/// - `AccountManager` calls this before removing the provider and cleaning up
+///   credentials, ensuring no stale write occurs after account deletion.
 actor RefreshOrchestrator {
 
     // MARK: - Dependencies
 
-    private let registry: ProviderRegistry
+    private let providerStore: AccountProviderStore
     private let resultStore: UsageResultStore
     private let historyStore: any UsageHistoryStoreProtocol
 
@@ -24,14 +31,20 @@ actor RefreshOrchestrator {
     private var refreshTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
 
+    /// Keys for accounts that are being torn down.
+    ///
+    /// Results produced for these accounts during an in-flight refresh are
+    /// rejected so that deleted accounts never appear in the result store.
+    private var quiescedAccounts: Set<AccountKey> = []
+
     // MARK: - Init
 
     init(
-        registry: ProviderRegistry,
+        providerStore: AccountProviderStore,
         resultStore: UsageResultStore,
         historyStore: any UsageHistoryStoreProtocol
     ) {
-        self.registry = registry
+        self.providerStore = providerStore
         self.resultStore = resultStore
         self.historyStore = historyStore
     }
@@ -73,6 +86,14 @@ actor RefreshOrchestrator {
         autoRefreshTask = nil
     }
 
+    /// Marks `key` as quiesced so results for it are discarded in the current
+    /// and all future refresh cycles.
+    ///
+    /// Called by `AccountManager` as the first step of account deletion.
+    func quiesceAccount(_ key: AccountKey) async {
+        quiescedAccounts.insert(key)
+    }
+
     // MARK: - Private — refresh lifecycle
 
     private func startRefresh() async {
@@ -100,20 +121,26 @@ actor RefreshOrchestrator {
     ///
     /// A single provider failure is captured and surfaced as an `.unavailable`
     /// display data entry so the rest of the results are unaffected.
+    /// Results for quiesced accounts are silently dropped before writing.
     private func performRefresh() async {
-        let providers = registry.allProviders()
+        let providers = await providerStore.allProviders()
         guard !providers.isEmpty else { return }
 
         var collectedResults: [ServiceUsageResult] = []
 
         await withTaskGroup(of: ServiceUsageResult?.self) { group in
             for provider in providers {
+                // Skip providers for accounts that are being deleted.
+                guard !quiescedAccounts.contains(provider.account) else { continue }
                 group.addTask {
                     await Self.fetchResult(from: provider)
                 }
             }
             for await result in group {
                 if let result {
+                    // Double-check quiescence in case the account was deleted
+                    // while this particular fetch was in flight.
+                    guard !self.quiescedAccounts.contains(result.accountKey) else { continue }
                     collectedResults.append(result)
                 }
             }
@@ -131,6 +158,8 @@ actor RefreshOrchestrator {
         from provider: any UsageProviderProtocol
     ) async -> ServiceUsageResult? {
         guard await provider.isConfigured() else { return nil }
+
+        let key = provider.account
 
         do {
             var displayData: [UsageDisplayData] = []
@@ -153,16 +182,14 @@ actor RefreshOrchestrator {
             }
 
             return ServiceUsageResult(
-                serviceType: provider.serviceType,
+                accountKey: key,
                 displayData: displayData,
                 fetchedAt: Date()
             )
         } catch {
-            let serviceType = provider.serviceType
-            let errorMessage = error.localizedDescription
             return ServiceUsageResult(
-                serviceType: serviceType,
-                displayData: [.unavailable(reason: errorMessage)],
+                accountKey: key,
+                displayData: [.unavailable(reason: error.localizedDescription)],
                 fetchedAt: Date()
             )
         }

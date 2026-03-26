@@ -8,6 +8,9 @@ protocol UsageProviderProtocol: Sendable {
     /// The service this provider fetches data for.
     var serviceType: ServiceType { get }
 
+    /// The account this provider fetches data for.
+    var account: AccountKey { get }
+
     /// Returns `true` when the provider has sufficient credentials and
     /// configuration to perform a fetch without immediately failing.
     func isConfigured() async -> Bool

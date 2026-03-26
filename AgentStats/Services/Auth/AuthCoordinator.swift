@@ -1,24 +1,12 @@
 import SwiftUI
 import WebKit
 
-// MARK: - AuthCoordinatorDelegate
-
-/// Notified when the OAuth WebView captures cookies from a successful login.
-protocol AuthCoordinatorDelegate: AnyObject {
-    func authCoordinator(
-        _ coordinator: AuthCoordinator,
-        didCaptureCookies cookies: [HTTPCookie],
-        authorizationHeader: String?,
-        userAgent: String?,
-        for service: ServiceType
-    )
-}
-
 // MARK: - AuthCoordinator
 
 /// Coordinates authentication flows for all registered services.
 ///
-/// `AuthCoordinator` owns the WebView window lifecycle and writes
+/// `AuthCoordinator` owns the WebView window lifecycle, manages the
+/// provisional account lifecycle via `AccountManager`, and writes
 /// completed credentials to `CredentialStore`. It runs on `@MainActor`
 /// because it manages AppKit windows and `@Published` SwiftUI state.
 @MainActor
@@ -33,57 +21,73 @@ final class AuthCoordinator: ObservableObject {
     /// Cleared automatically when a new authentication begins.
     @Published var authError: String?
 
-    /// The service currently being authenticated; `nil` when idle.
-    @Published var authenticatingService: ServiceType?
+    /// The account key currently being authenticated; `nil` when idle.
+    @Published var authenticatingAccountKey: AccountKey?
 
     // MARK: Dependencies
 
     private let credentialStore: CredentialStore
+    private let accountManager: AccountManager
 
     // MARK: Internal state
 
     /// The window hosting the `OAuthWebView` during an in-progress flow.
     private var authWindow: NSWindow?
 
+    /// Strong reference to the window's delegate to prevent premature deallocation.
+    /// `NSWindow.delegate` is a `weak` property, so we must retain the delegate independently.
+    private var authWindowDelegate: WindowCloseDelegate?
+
     // MARK: Init
 
-    init(credentialStore: CredentialStore) {
+    init(credentialStore: CredentialStore, accountManager: AccountManager) {
         self.credentialStore = credentialStore
+        self.accountManager = accountManager
     }
 
     // MARK: Public API
 
     /// Begins the authentication flow for `service` using `method`.
     ///
+    /// A provisional account is registered with `AccountManager` before the
+    /// OAuth window opens so that the account is tracked from the start of
+    /// the flow. On success the account is activated; on failure or cancel
+    /// it is discarded.
+    ///
     /// For `.oauthWebView`, a floating `NSWindow` is opened containing an
     /// `OAuthWebView`. When the WebView signals that cookies have been
     /// captured the window is dismissed and credentials are persisted.
     ///
     /// Other auth methods (PAT, API key) are handled via the Settings UI
-    /// and are not initiated from this method in Phase 1.
+    /// and are not initiated from this method.
     func authenticate(service: ServiceType, method: AuthMethod) async {
         authError = nil
-        authenticatingService = service
         isAuthenticating = true
 
         switch method {
         case .oauthWebView(let loginURL):
-            openOAuthWindow(for: service, loginURL: loginURL)
+            // Register a provisional account before starting the OAuth flow.
+            let accountKey = await accountManager.registerProvisional(
+                service: service,
+                label: service.displayName
+            )
+            authenticatingAccountKey = accountKey
+            openOAuthWindow(for: accountKey, loginURL: loginURL)
 
         case .personalAccessToken, .apiKey:
             // Token/key entry is handled by the Settings view; nothing to do here.
             isAuthenticating = false
-            authenticatingService = nil
+            authenticatingAccountKey = nil
 
         case .none:
             isAuthenticating = false
-            authenticatingService = nil
+            authenticatingAccountKey = nil
         }
     }
 
-    /// Removes stored credentials for `service` from `CredentialStore`.
-    func signOut(service: ServiceType) async {
-        await credentialStore.invalidate(for: service)
+    /// Removes stored credentials for `accountKey` and unregisters the account.
+    func signOut(accountKey: AccountKey) async {
+        await accountManager.unregister(accountKey)
     }
 
     /// Called by `OAuthWebView.Coordinator` when the login page yields cookies.
@@ -91,14 +95,15 @@ final class AuthCoordinator: ObservableObject {
         _ cookies: [HTTPCookie],
         authorizationHeader: String?,
         userAgent: String?,
-        for service: ServiceType
+        for accountKey: AccountKey
     ) async {
         closeAuthWindow()
 
         guard !cookies.isEmpty || authorizationHeader != nil else {
             authError = "No credentials were captured. Please try again."
             isAuthenticating = false
-            authenticatingService = nil
+            await accountManager.discardProvisional(accountKey)
+            authenticatingAccountKey = nil
             return
         }
 
@@ -111,28 +116,30 @@ final class AuthCoordinator: ObservableObject {
             expiresAt: nil // Services without explicit expiry; rely on `needsReauth` check
         )
 
-        await credentialStore.save(for: service, material: material)
+        await credentialStore.save(for: accountKey, material: material)
+        await accountManager.activateAccount(accountKey)
 
         isAuthenticating = false
-        authenticatingService = nil
+        authenticatingAccountKey = nil
     }
 
     /// Called by `OAuthWebView.Coordinator` when the login flow encounters an error.
-    func handleAuthError(_ error: String, for service: ServiceType) {
+    func handleAuthError(_ error: String, for accountKey: AccountKey) async {
         closeAuthWindow()
         authError = error
         isAuthenticating = false
-        authenticatingService = nil
+        await accountManager.discardProvisional(accountKey)
+        authenticatingAccountKey = nil
     }
 
     // MARK: Private helpers
 
-    private func openOAuthWindow(for service: ServiceType, loginURL: URL) {
+    private func openOAuthWindow(for accountKey: AccountKey, loginURL: URL) {
         closeAuthWindow() // Dismiss any existing window first.
 
         let webView = OAuthWebView(
             url: loginURL,
-            service: service,
+            accountKey: accountKey,
             coordinator: self
         )
         let hosting = NSHostingView(rootView: webView)
@@ -144,19 +151,24 @@ final class AuthCoordinator: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        window.title = "Sign in to \(service.displayName)"
+        window.title = "Sign in to \(accountKey.serviceType.displayName)"
         window.contentView = hosting
         window.isReleasedWhenClosed = false
         window.center()
         window.makeKeyAndOrderFront(nil)
-        window.delegate = WindowCloseDelegate(onClose: { [weak self] in
+        let closeDelegate = WindowCloseDelegate(onClose: { [weak self] in
             guard let self else { return }
             if self.isAuthenticating {
                 self.authError = "Authentication was cancelled."
                 self.isAuthenticating = false
-                self.authenticatingService = nil
+                Task {
+                    await self.accountManager.discardProvisional(accountKey)
+                }
+                self.authenticatingAccountKey = nil
             }
         })
+        window.delegate = closeDelegate
+        authWindowDelegate = closeDelegate
 
         authWindow = window
     }
@@ -164,6 +176,7 @@ final class AuthCoordinator: ObservableObject {
     private func closeAuthWindow() {
         authWindow?.close()
         authWindow = nil
+        authWindowDelegate = nil
     }
 }
 

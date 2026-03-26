@@ -63,74 +63,49 @@ final class ProviderFactoryTests: XCTestCase {
         XCTAssertEqual(provider.account, account.key)
     }
 
-    // MARK: - makeProvider for unimplemented types (PlaceholderProvider)
+    // MARK: - makeProvider for Phase 3 providers
 
-    func testMakeProviderForGeminiReturnsPlaceholderProvider() {
+    func testMakeProviderForGeminiReturnsGeminiProvider() {
         let factory = makeFactory()
         let account = makeAccount(serviceType: .gemini)
-
         let provider = factory.makeProvider(for: account)
-
-        XCTAssertTrue(
-            provider is PlaceholderProvider,
-            "Expected PlaceholderProvider for .gemini but got \(type(of: provider))"
-        )
+        XCTAssertTrue(provider is GeminiUsageProvider, "Expected GeminiUsageProvider but got \(type(of: provider))")
     }
 
-    func testMakeProviderForCopilotReturnsPlaceholderProvider() {
+    func testMakeProviderForCopilotReturnsCopilotProvider() {
         let factory = makeFactory()
         let account = makeAccount(serviceType: .copilot)
-
         let provider = factory.makeProvider(for: account)
-
-        XCTAssertTrue(provider is PlaceholderProvider)
+        XCTAssertTrue(provider is CopilotUsageProvider, "Expected CopilotUsageProvider but got \(type(of: provider))")
     }
 
-    func testMakeProviderForCursorReturnsPlaceholderProvider() {
+    func testMakeProviderForCursorReturnsCursorProvider() {
         let factory = makeFactory()
         let account = makeAccount(serviceType: .cursor)
-
         let provider = factory.makeProvider(for: account)
-
-        XCTAssertTrue(provider is PlaceholderProvider)
+        XCTAssertTrue(provider is CursorUsageProvider, "Expected CursorUsageProvider but got \(type(of: provider))")
     }
 
-    func testMakeProviderForOpencodeReturnsPlaceholderProvider() {
+    func testMakeProviderForOpencodeReturnsOpenCodeProvider() {
         let factory = makeFactory()
         let account = makeAccount(serviceType: .opencode)
-
         let provider = factory.makeProvider(for: account)
-
-        XCTAssertTrue(provider is PlaceholderProvider)
+        XCTAssertTrue(provider is OpenCodeUsageProvider, "Expected OpenCodeUsageProvider but got \(type(of: provider))")
     }
 
-    func testMakeProviderForZaiReturnsPlaceholderProvider() {
+    func testMakeProviderForZaiReturnsZaiProvider() {
         let factory = makeFactory()
         let account = makeAccount(serviceType: .zai)
-
         let provider = factory.makeProvider(for: account)
-
-        XCTAssertTrue(provider is PlaceholderProvider)
+        XCTAssertTrue(provider is ZaiUsageProvider, "Expected ZaiUsageProvider but got \(type(of: provider))")
     }
 
-    func testPlaceholderProviderHasCorrectAccount() {
+    func testAllProvidersHaveCorrectAccount() {
         let factory = makeFactory()
-        let account = makeAccount(serviceType: .gemini)
-
-        let provider = factory.makeProvider(for: account)
-
-        XCTAssertEqual(provider.account, account.key)
-    }
-
-    // MARK: - PlaceholderProvider.isConfigured() returns false
-
-    func testPlaceholderProviderIsConfiguredReturnsFalse() async {
-        let factory = makeFactory()
-        let account = makeAccount(serviceType: .gemini)
-        let provider = factory.makeProvider(for: account)
-
-        let configured = await provider.isConfigured()
-
-        XCTAssertFalse(configured)
+        for service in ServiceType.allCases {
+            let account = makeAccount(serviceType: service)
+            let provider = factory.makeProvider(for: account)
+            XCTAssertEqual(provider.account, account.key, "Account mismatch for \(service)")
+        }
     }
 }

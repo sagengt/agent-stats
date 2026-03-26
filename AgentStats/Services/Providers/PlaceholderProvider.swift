@@ -12,8 +12,11 @@ struct PlaceholderProvider: UsageProviderProtocol {
 
     // MARK: Properties
 
-    /// The service this placeholder stands in for.
-    let serviceType: ServiceType
+    /// The account this placeholder stands in for.
+    let account: AccountKey
+
+    /// Derived from `account.serviceType` to satisfy `UsageProviderProtocol`.
+    var serviceType: ServiceType { account.serviceType }
 
     // MARK: UsageProviderProtocol
 

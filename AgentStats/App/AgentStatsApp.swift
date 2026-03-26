@@ -14,6 +14,13 @@ struct AgentStatsApp: App {
 
     @StateObject private var viewModel: UsageViewModel
     @StateObject private var authCoordinator: AuthCoordinator
+    @StateObject private var languageManager: LanguageManager = .shared
+
+    /// Retained so the Settings window can present the full history tab.
+    private let historyStore: UsageHistoryStore
+
+    /// Actor that fires quota threshold notifications after each refresh cycle.
+    private let notificationManager: ThresholdNotificationManager = ThresholdNotificationManager()
 
     // MARK: Init
 
@@ -24,44 +31,60 @@ struct AgentStatsApp: App {
         let resultStore = UsageResultStore()
         let historyStore = UsageHistoryStore()
 
-        // Register concrete providers.
-        let claudeProvider = ClaudeUsageProvider(credentialStore: credentialStore)
-        let codexProvider = CodexUsageProvider(credentialStore: credentialStore)
+        // Load the persisted account snapshot (strips orphan provisionals on cold launch).
+        let snapshot = AccountSnapshotLoader.loadSync()
 
-        // Placeholder providers for services not yet implemented in Phase 1.
-        // Replace each PlaceholderProvider with a concrete implementation as
-        // the corresponding service is built out in subsequent phases.
-        let geminiProvider  = PlaceholderProvider(serviceType: .gemini)
-        let copilotProvider = PlaceholderProvider(serviceType: .copilot)
-        let cursorProvider  = PlaceholderProvider(serviceType: .cursor)
-        let opencodeProvider = PlaceholderProvider(serviceType: .opencode)
-        let zaiProvider     = PlaceholderProvider(serviceType: .zai)
+        // Build the provider factory and bootstrap the provider store from persisted accounts.
+        let apiClient = APIClient.shared
+        let factory = ProviderFactory(credentialStore: credentialStore, apiClient: apiClient)
+        let providerStore = AccountProviderStore(
+            accounts: snapshot.activeAccounts,
+            factory: factory
+        )
 
-        let registry = ProviderRegistry(providers: [
-            claudeProvider,
-            codexProvider,
-            geminiProvider,
-            copilotProvider,
-            cursorProvider,
-            opencodeProvider,
-            zaiProvider,
-        ])
-
-        // Wire orchestrator with the full provider graph.
+        // Wire orchestrator with the account-keyed provider graph.
         let orchestrator = RefreshOrchestrator(
-            registry: registry,
+            providerStore: providerStore,
             resultStore: resultStore,
             historyStore: historyStore as any UsageHistoryStoreProtocol
         )
 
+        // Build the account manager that owns registration / deletion lifecycle.
+        let accountManager = AccountManager(
+            snapshot: snapshot,
+            providerStore: providerStore,
+            credentialStore: credentialStore,
+            resultStore: resultStore,
+            orchestrator: orchestrator
+        )
+
+        // Retain history store so the Settings window can access it.
+        self.historyStore = historyStore
+
         // Initialise StateObjects from the constructed graph.
         _viewModel = StateObject(wrappedValue: UsageViewModel(
             resultStore: resultStore,
-            orchestrator: orchestrator
+            orchestrator: orchestrator,
+            accountManager: accountManager
         ))
         _authCoordinator = StateObject(wrappedValue: AuthCoordinator(
-            credentialStore: credentialStore
+            credentialStore: credentialStore,
+            accountManager: accountManager
         ))
+
+        // Request notification authorization on first launch (non-blocking).
+        Task {
+            await ThresholdNotificationManager.requestAuthorization()
+        }
+    }
+
+    // MARK: Preferences
+
+    @AppStorage(MenuBarDisplayModeKey.userDefaultsKey)
+    private var displayModeRaw: String = MenuBarDisplayMode.label.rawValue
+
+    private var displayMode: MenuBarDisplayMode {
+        MenuBarDisplayMode(rawValue: displayModeRaw) ?? .label
     }
 
     // MARK: Scene
@@ -71,39 +94,51 @@ struct AgentStatsApp: App {
             MenuBarContentView()
                 .environmentObject(viewModel)
                 .environmentObject(authCoordinator)
+                .environmentObject(languageManager)
         } label: {
-            MenuBarLabelView(results: viewModel.results)
+            menuBarLabel
         }
         .menuBarExtraStyle(.window)
+        .onChange(of: viewModel.results) { _, newResults in
+            // Evaluate thresholds after every result update.
+            Task { await notificationManager.evaluate(results: newResults) }
+        }
 
         Settings {
-            SettingsPlaceholderView()
+            SettingsTabView(historyStore: historyStore)
                 .environmentObject(authCoordinator)
+                .environmentObject(viewModel)
+                .environmentObject(languageManager)
         }
     }
-}
 
-// MARK: - SettingsPlaceholderView
+    // MARK: Menu bar label
 
-/// Phase 1 placeholder for the Settings window.
-/// A full implementation will be provided in Phase 2.
-private struct SettingsPlaceholderView: View {
-    @EnvironmentObject var authCoordinator: AuthCoordinator
+    @ViewBuilder
+    private var menuBarLabel: some View {
+        switch displayMode {
+        case .label:
+            MenuBarLabelView(results: viewModel.results)
 
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "chart.bar.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.blue)
+        case .carousel:
+            StackedBarView(results: viewModel.results)
 
-            Text("AgentStats Settings")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            Text("Full settings UI coming in Phase 2.")
-                .foregroundStyle(.secondary)
+        case .compact:
+            compactLabel
         }
-        .padding(40)
-        .frame(width: 400, height: 300)
+    }
+
+    /// Icon-only label tinted by the highest quota usage colour.
+    private var compactLabel: some View {
+        let pct = viewModel.highestQuotaPercentage ?? 0
+        let tint: Color = {
+            switch pct {
+            case ..<0.5:  return .green
+            case ..<0.8:  return .orange
+            default:      return .red
+            }
+        }()
+        return Image(systemName: "chart.bar.fill")
+            .foregroundStyle(viewModel.results.isEmpty ? .primary : tint)
     }
 }

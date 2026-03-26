@@ -15,11 +15,16 @@ struct OAuthWebView: NSViewRepresentable {
     /// The starting URL for the authentication page (e.g. `https://claude.ai`).
     let url: URL
 
-    /// Service being authenticated — used when reporting results.
-    let service: ServiceType
+    /// The account key being authenticated — carries both service type and account ID.
+    let accountKey: AccountKey
 
     /// Back-reference to the coordinator that manages credential persistence.
     weak var coordinator: AuthCoordinator?
+
+    // MARK: Derived
+
+    /// Service type derived from `accountKey`.
+    private var service: ServiceType { accountKey.serviceType }
 
     // MARK: NSViewRepresentable
 
@@ -45,7 +50,7 @@ struct OAuthWebView: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(service: service, authCoordinator: coordinator)
+        Coordinator(accountKey: accountKey, authCoordinator: coordinator)
     }
 
     // MARK: - Coordinator
@@ -55,7 +60,8 @@ struct OAuthWebView: NSViewRepresentable {
 
         // MARK: State
 
-        private let service: ServiceType
+        private let accountKey: AccountKey
+        private var service: ServiceType { accountKey.serviceType }
         private weak var authCoordinator: AuthCoordinator?
 
         /// Set of URL host patterns that indicate a successful login.
@@ -70,10 +76,10 @@ struct OAuthWebView: NSViewRepresentable {
 
         // MARK: Init
 
-        init(service: ServiceType, authCoordinator: AuthCoordinator?) {
-            self.service = service
+        init(accountKey: AccountKey, authCoordinator: AuthCoordinator?) {
+            self.accountKey = accountKey
             self.authCoordinator = authCoordinator
-            self.successHostPatterns = Self.successPatterns(for: service)
+            self.successHostPatterns = Self.successPatterns(for: accountKey.serviceType)
         }
 
         // MARK: WKNavigationDelegate
@@ -99,9 +105,9 @@ struct OAuthWebView: NSViewRepresentable {
                 guard nsError.domain != NSURLErrorDomain ||
                       nsError.code != NSURLErrorCancelled else { return }
 
-                self.authCoordinator?.handleAuthError(
+                await self.authCoordinator?.handleAuthError(
                     "Page load failed: \(error.localizedDescription)",
-                    for: self.service
+                    for: self.accountKey
                 )
             }
         }
@@ -177,7 +183,7 @@ struct OAuthWebView: NSViewRepresentable {
                         filteredCookies,
                         authorizationHeader: self.capturedAuthorizationHeader,
                         userAgent: userAgent,
-                        for: self.service
+                        for: self.accountKey
                     )
                 }
             }

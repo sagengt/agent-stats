@@ -15,10 +15,12 @@ protocol UsageHistoryStoreProtocol: Sendable {
     /// within the closed date range `[since, until]`.
     ///
     /// - Parameters:
-    ///   - service: The service to query records for.
-    ///   - since:   Inclusive lower bound of the time range.
-    ///   - until:   Inclusive upper bound of the time range.
-    func records(for service: ServiceType, since: Date, until: Date) async -> [UsageHistoryRecord]
+    ///   - service:    The service to query records for.
+    ///   - accountKey: When non-nil, restricts results to the specified account.
+    ///                 When nil, returns records for all accounts of the service.
+    ///   - since:      Inclusive lower bound of the time range.
+    ///   - until:      Inclusive upper bound of the time range.
+    func records(for service: ServiceType, accountKey: AccountKey?, since: Date, until: Date) async -> [UsageHistoryRecord]
 
     /// Returns the set of services for which at least one record exists.
     func availableServices() async -> [ServiceType]

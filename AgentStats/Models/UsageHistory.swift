@@ -72,19 +72,22 @@ enum CodableUsageDisplayData: Sendable, Codable {
 
 // MARK: - UsageHistoryRecord
 
-/// A single persisted snapshot of usage data for one service. The
+/// A single persisted snapshot of usage data for one service account. The
 /// `schemaVersion` field allows future migrations without breaking
 /// existing stored records.
 struct UsageHistoryRecord: Sendable, Codable {
     /// Current on-disk schema version. Increment when the layout changes in a
     /// backwards-incompatible way and provide a migration path.
-    static let schemaVersion: Int = 1
+    static let schemaVersion: Int = 2
 
     /// The schema version this record was written with.
     let schemaVersion: Int
 
+    /// The account this record belongs to.
+    let accountKey: AccountKey
+
     /// Service this record belongs to.
-    let serviceType: ServiceType
+    var serviceType: ServiceType { accountKey.serviceType }
 
     /// Ordered list of usage values captured at `recordedAt`.
     let displayData: [CodableUsageDisplayData]

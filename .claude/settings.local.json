@@ -5,7 +5,23 @@
       "WebFetch(domain:api.github.com)",
       "Bash(brew install:*)",
       "Bash(xcodebuild -project AgentStats.xcodeproj -scheme AgentStats -destination 'platform=macOS' build)",
-      "Bash(xcrun swiftc:*)"
+      "Bash(xcrun swiftc:*)",
+      "Bash(xcodebuild -project AgentStats.xcodeproj -scheme AgentStats -destination \"platform=macOS,arch=arm64\" build)",
+      "Bash(xcodebuild -project /Users/seiji/sagengt/agent-stats/AgentStats.xcodeproj -scheme AgentStats -destination \"platform=macOS,arch=arm64\" build)",
+      "Bash(xcodebuild -scheme AgentStats -destination \"platform=macOS,arch=arm64\")",
+      "Bash(xcodebuild -project AgentStats.xcodeproj -scheme AgentStats -configuration Debug build CODE_SIGN_IDENTITY=\"\" CODE_SIGNING_REQUIRED=NO)",
+      "Bash(xcodebuild -project AgentStats.xcodeproj -scheme AgentStats build CODE_SIGN_IDENTITY=\"\" CODE_SIGNING_REQUIRED=NO)",
+      "Bash(xcodebuild -project /Users/seiji/sagengt/agent-stats/AgentStats.xcodeproj -scheme AgentStats build CODE_SIGN_IDENTITY=\"\" CODE_SIGNING_REQUIRED=NO -quiet)",
+      "Bash(xcodebuild -project AgentStats.xcodeproj -scheme AgentStats -destination 'platform=macOS' build-for-testing)",
+      "Bash(xcodegen generate:*)",
+      "Bash(xcodebuild test:*)",
+      "Bash(xcodebuild -project AgentStats.xcodeproj -scheme AgentStats -destination 'platform=macOS,arch=arm64' build-for-testing)",
+      "Bash(xcodebuild build-for-testing:*)",
+      "Bash(xcodebuild -project /Users/seiji/sagengt/agent-stats/AgentStats.xcodeproj -scheme AgentStats -destination 'platform=macOS,arch=arm64' build-for-testing)",
+      "Bash(xcodebuild build:*)",
+      "Bash(swiftc:*)",
+      "Bash(xcodebuild -project /Users/seiji/sagengt/agent-stats/AgentStats.xcodeproj -scheme AgentStats -destination 'platform=macOS' build)",
+      "Bash(xcodebuild -list -project AgentStats.xcodeproj)"
     ]
   }
 }

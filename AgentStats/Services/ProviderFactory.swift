@@ -32,8 +32,28 @@ struct ProviderFactory: Sendable {
                 credentialStore: credentialStore,
                 apiClient: apiClient
             )
-        default:
-            return PlaceholderProvider(account: key)
+        case .gemini:
+            return GeminiUsageProvider(
+                account: key,
+                credentialStore: credentialStore,
+                apiClient: apiClient
+            )
+        case .copilot:
+            return CopilotUsageProvider(
+                account: key,
+                credentialStore: credentialStore,
+                apiClient: apiClient
+            )
+        case .cursor:
+            return CursorUsageProvider(account: key)
+        case .opencode:
+            return OpenCodeUsageProvider(account: key)
+        case .zai:
+            return ZaiUsageProvider(
+                account: key,
+                credentialStore: credentialStore,
+                apiClient: apiClient
+            )
         }
     }
 }

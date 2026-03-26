@@ -5,6 +5,24 @@ final class UsageHistoryStoreTests: XCTestCase {
 
     // MARK: - Helpers
 
+    private var tempDir: URL!
+
+    override func setUp() {
+        super.setUp()
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AgentStatsTests-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: tempDir)
+        super.tearDown()
+    }
+
+    private func makeStore() -> UsageHistoryStore {
+        UsageHistoryStore(storageDirectory: tempDir)
+    }
+
     private func makeResult(
         serviceType: ServiceType,
         accountId: String = UUID().uuidString,
@@ -25,7 +43,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     // MARK: - record() appends UsageHistoryRecords with correct accountKey
 
     func testRecordAppendsRecordsWithCorrectAccountKey() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let result = makeResult(serviceType: .claude)
 
         await store.record(results: [result])
@@ -39,7 +57,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     }
 
     func testRecordAppendsBatchResults() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let r1 = makeResult(serviceType: .claude)
         let r2 = makeResult(serviceType: .claude)
 
@@ -53,7 +71,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     }
 
     func testRecordMultipleBatchesAccumulatesRecords() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let r1 = makeResult(serviceType: .claude)
         let r2 = makeResult(serviceType: .claude)
 
@@ -70,7 +88,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     // MARK: - records(for:accountKey:since:until:) filters by service and date range
 
     func testRecordsFiltersByService() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let claudeResult = makeResult(serviceType: .claude)
         let codexResult = makeResult(serviceType: .codex)
 
@@ -88,7 +106,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     }
 
     func testRecordsFiltersOutOfRangeDates() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         // record() uses Date() internally for recordedAt, so record is always "now"
         let result = makeResult(serviceType: .claude)
         await store.record(results: [result])
@@ -102,7 +120,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     }
 
     func testRecordsIncludesRecordsAtCurrentTime() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let result = makeResult(serviceType: .claude)
         await store.record(results: [result])
 
@@ -115,7 +133,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     }
 
     func testRecordsExcludesResultsWhenQueryRangeIsFuture() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let result = makeResult(serviceType: .claude)
         await store.record(results: [result])
 
@@ -130,7 +148,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     // MARK: - records(for:accountKey:since:until:) filters by accountKey when non-nil
 
     func testRecordsFiltersByAccountKeyWhenProvided() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let idA = UUID().uuidString
         let idB = UUID().uuidString
         let resultA = makeResult(serviceType: .claude, accountId: idA)
@@ -147,7 +165,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     }
 
     func testRecordsReturnsOnlyMatchingAccountKey() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let idA = UUID().uuidString
         let idB = UUID().uuidString
         let resultA = makeResult(serviceType: .claude, accountId: idA)
@@ -166,7 +184,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     // MARK: - records(for:accountKey:since:until:) returns all accounts when accountKey is nil
 
     func testRecordsReturnsAllAccountsWhenAccountKeyIsNil() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let id1 = UUID().uuidString
         let id2 = UUID().uuidString
         let r1 = makeResult(serviceType: .claude, accountId: id1)
@@ -184,7 +202,7 @@ final class UsageHistoryStoreTests: XCTestCase {
     // MARK: - availableServices() returns unique ServiceTypes
 
     func testAvailableServicesReturnsUniqueServiceTypes() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let r1 = makeResult(serviceType: .claude)
         let r2 = makeResult(serviceType: .claude) // duplicate service
         let r3 = makeResult(serviceType: .codex)
@@ -200,13 +218,13 @@ final class UsageHistoryStoreTests: XCTestCase {
     }
 
     func testAvailableServicesReturnsEmptyWhenNoRecords() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         let services = await store.availableServices()
         XCTAssertTrue(services.isEmpty)
     }
 
     func testAvailableServicesRespectsCanonicalOrdering() async {
-        let store = UsageHistoryStore()
+        let store = makeStore()
         // Insert in reverse canonical order
         let codexResult = makeResult(serviceType: .codex)
         let claudeResult = makeResult(serviceType: .claude)

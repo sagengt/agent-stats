@@ -1,10 +1,10 @@
 import Foundation
 
-/// Actor that holds the latest fetch result for each service.
+/// Actor that holds the latest fetch result for each account.
 ///
 /// This is an in-memory store only — no persistence.
 /// ViewModels subscribe via `resultStream()`, which emits the full result
-/// set whenever any service is updated.
+/// set whenever any account is updated.
 actor UsageResultStore {
 
     // MARK: - Subscriber token
@@ -22,7 +22,7 @@ actor UsageResultStore {
 
     // MARK: - State
 
-    private var results: [ServiceType: ServiceUsageResult] = [:]
+    private var results: [AccountKey: ServiceUsageResult] = [:]
     private var subscribers: [UUID: Subscriber] = [:]
 
     // MARK: - Public API
@@ -30,22 +30,30 @@ actor UsageResultStore {
     /// Replaces or inserts each element of `newResults`, then broadcasts.
     ///
     /// Accepting a batch ensures subscribers receive one notification per
-    /// refresh cycle rather than one per service.
+    /// refresh cycle rather than one per account.
     func update(results newResults: [ServiceUsageResult]) async {
         for result in newResults {
-            results[result.serviceType] = result
+            results[result.accountKey] = result
         }
         broadcast()
     }
 
-    /// Returns the most recent result for `service`, or `nil` if not yet fetched.
-    func result(for service: ServiceType) async -> ServiceUsageResult? {
-        results[service]
+    /// Returns the most recent result for `key`, or `nil` if not yet fetched.
+    func result(for key: AccountKey) async -> ServiceUsageResult? {
+        results[key]
     }
 
-    /// Returns all stored results ordered by `ServiceType.allCases`.
+    /// Returns all stored results ordered by insertion order (stable across broadcasts).
     func allResults() async -> [ServiceUsageResult] {
-        ServiceType.allCases.compactMap { results[$0] }
+        Array(results.values)
+    }
+
+    /// Removes the stored result for `key`, then broadcasts the updated set.
+    ///
+    /// Called by `AccountManager.unregister(_:)` to clean up after account deletion.
+    func remove(account key: AccountKey) async {
+        results.removeValue(forKey: key)
+        broadcast()
     }
 
     /// Returns an `AsyncStream` that emits the full result set on every update.
@@ -72,7 +80,7 @@ actor UsageResultStore {
         let subscriber = Subscriber(continuation: continuation)
         subscribers[subscriber.id] = subscriber
         // Emit current state immediately.
-        let current = ServiceType.allCases.compactMap { results[$0] }
+        let current = Array(results.values)
         if !current.isEmpty {
             continuation.yield(current)
         }
@@ -84,7 +92,7 @@ actor UsageResultStore {
     }
 
     private func broadcast() {
-        let snapshot = ServiceType.allCases.compactMap { results[$0] }
+        let snapshot = Array(results.values)
         for subscriber in subscribers.values {
             subscriber.continuation.yield(snapshot)
         }
