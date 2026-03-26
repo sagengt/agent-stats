@@ -70,6 +70,19 @@ struct ProvidersSettingsTab: View {
         .onChange(of: viewModel.lastRefreshedAt) { _, _ in
             Task { await loadAccounts() }
         }
+        .onChange(of: authCoordinator.activationCount) { _, _ in
+            Task {
+                await loadAccounts()
+                // Trigger a refresh so the new account's data is fetched immediately.
+                viewModel.refresh()
+            }
+        }
+        .onChange(of: authCoordinator.isAuthenticating) { _, isAuth in
+            if !isAuth {
+                // Reload when auth flow ends (success or cancel).
+                Task { await loadAccounts() }
+            }
+        }
     }
 
     // MARK: Actions

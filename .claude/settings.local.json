@@ -21,7 +21,10 @@
       "Bash(xcodebuild build:*)",
       "Bash(swiftc:*)",
       "Bash(xcodebuild -project /Users/seiji/sagengt/agent-stats/AgentStats.xcodeproj -scheme AgentStats -destination 'platform=macOS' build)",
-      "Bash(xcodebuild -list -project AgentStats.xcodeproj)"
+      "Bash(xcodebuild -list -project AgentStats.xcodeproj)",
+      "Bash(open /tmp/AgentStats.app)",
+      "Bash(security find-generic-password:*)",
+      "Bash(defaults export:*)"
     ]
   }
 }

@@ -10,11 +10,6 @@ actor CredentialStore {
 
     private let keychain: KeychainManager
 
-    // MARK: - State
-
-    /// In-memory cache keyed by `AccountKey`.
-    private var cache: [AccountKey: CredentialMaterial] = [:]
-
     // MARK: - Init
 
     init(keychain: KeychainManager = .shared) {
@@ -23,53 +18,31 @@ actor CredentialStore {
 
     // MARK: - Public API
 
-    /// Persists `material` to both the in-memory cache and Keychain.
     func save(for key: AccountKey, material: CredentialMaterial) async {
-        cache[key] = material
-        let keychainKey = self.keychainKey(for: key)
+        let storageKey = self.keychainKey(for: key)
         do {
-            try keychain.save(material, for: keychainKey)
+            try keychain.save(material, for: storageKey)
+            AppLogger.log("[CredentialStore] Saved: \(key.serviceType):\(key.accountId.prefix(8))")
         } catch {
-            // Keychain persistence failure is non-fatal; cache remains valid for the session.
-            // The credential will be re-entered on next launch if the process restarts.
-            print("[CredentialStore] Keychain save failed for \(key): \(error.localizedDescription)")
+            AppLogger.log("[CredentialStore] Save FAILED: \(error.localizedDescription)")
         }
     }
 
-    /// Returns the credential for `key`, loading from Keychain on first access.
-    /// Returns `nil` if no credential has been stored.
     func load(for key: AccountKey) async -> CredentialMaterial? {
-        if let cached = cache[key] {
-            return cached
-        }
-
-        let keychainKey = self.keychainKey(for: key)
+        let storageKey = self.keychainKey(for: key)
         do {
-            if let material = try keychain.load(CredentialMaterial.self, for: keychainKey) {
-                cache[key] = material
-                return material
-            }
+            return try keychain.load(CredentialMaterial.self, for: storageKey)
         } catch {
-            print("[CredentialStore] Keychain load failed for \(key): \(error.localizedDescription)")
+            AppLogger.log("[CredentialStore] Load failed: \(error.localizedDescription)")
+            return nil
         }
-        return nil
     }
 
-    /// Removes the credential for `key` from both the cache and Keychain.
     func invalidate(for key: AccountKey) async {
-        cache.removeValue(forKey: key)
-        let keychainKey = self.keychainKey(for: key)
-        do {
-            try keychain.delete(for: keychainKey)
-        } catch {
-            print("[CredentialStore] Keychain delete failed for \(key): \(error.localizedDescription)")
-        }
+        let storageKey = self.keychainKey(for: key)
+        do { try keychain.delete(for: storageKey) } catch {}
     }
 
-    /// Permanently deletes the credential for `key` from both the cache and Keychain.
-    ///
-    /// Semantically identical to `invalidate`; provided as an explicit deletion
-    /// API for the account-removal flow to make intent clear at call sites.
     func delete(for key: AccountKey) async {
         await invalidate(for: key)
     }

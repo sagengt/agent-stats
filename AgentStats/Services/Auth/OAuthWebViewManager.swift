@@ -30,7 +30,12 @@ struct OAuthWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent() // Fresh session per login.
+        // Use the default persistent data store so that OAuth redirects,
+        // CAPTCHA challenges, and multi-step logins can retain state across
+        // navigations. Credentials are extracted once login completes and
+        // stored via CredentialStore; the WebView's cookie jar is not relied
+        // upon for long-term persistence.
+        configuration.websiteDataStore = .default()
 
         // Install the script message handler so the page JS can signal readiness
         // if needed (currently unused but reserved for future handshake).
@@ -145,14 +150,23 @@ struct OAuthWebView: NSViewRepresentable {
             guard !hasCapture else { return }
 
             let host = url.host ?? ""
+            let path = url.path
+
+            AppLogger.log("[OAuthWebView] Navigation finished: host=\(host) path=\(path)")
+
             let isSuccess = successHostPatterns.contains(where: { host.hasSuffix($0) })
-            guard isSuccess else { return }
+            guard isSuccess else {
+                AppLogger.log("[OAuthWebView] Host \(host) not in success patterns: \(successHostPatterns)")
+                return
+            }
 
-            // Check for a post-login path indicator to avoid triggering on the
-            // login page itself (e.g. the landing page after auth completes).
             let isPostLogin = isPostLoginURL(url)
-            guard isPostLogin else { return }
+            guard isPostLogin else {
+                AppLogger.log("[OAuthWebView] Path \(path) is not a post-login URL — waiting for redirect")
+                return
+            }
 
+            AppLogger.log("[OAuthWebView] Login success detected! Capturing credentials...")
             hasCapture = true
             extractCredentials(from: webView)
         }
@@ -161,6 +175,7 @@ struct OAuthWebView: NSViewRepresentable {
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    AppLogger.log("[OAuthWebView] Total cookies captured: \(cookies.count)")
                     let userAgent = try? await webView.evaluateJavaScript("navigator.userAgent") as? String
 
                     // Filter cookies to only those belonging to the service's
@@ -179,6 +194,14 @@ struct OAuthWebView: NSViewRepresentable {
                         }
                     }
 
+                    AppLogger.log("[OAuthWebView] Filtered cookies: \(filteredCookies.count) (domains: \(allowedDomains))")
+                    if filteredCookies.isEmpty {
+                        AppLogger.log("[OAuthWebView] WARNING: No cookies matched allowed domains!")
+                        for cookie in cookies.prefix(10) {
+                            AppLogger.log("[OAuthWebView]   cookie: \(cookie.domain) / \(cookie.name)")
+                        }
+                    }
+
                     await self.authCoordinator?.handleCapturedCookies(
                         filteredCookies,
                         authorizationHeader: self.capturedAuthorizationHeader,
@@ -191,16 +214,21 @@ struct OAuthWebView: NSViewRepresentable {
 
         /// Returns `true` when `url` is a post-authentication destination.
         private func isPostLoginURL(_ url: URL) -> Bool {
+            let path = url.path
             switch service {
             case .claude:
+                // Exclude login/signup pages — only trigger on the actual app pages.
+                let loginPaths = ["/login", "/signup", "/oauth", "/verify", "/consent"]
+                if loginPaths.contains(where: { path.hasPrefix($0) }) { return false }
                 // Claude lands on the main app after successful OAuth.
-                let path = url.path
                 return path == "/" || path.hasPrefix("/new") || path.hasPrefix("/chat")
+                    || path.hasPrefix("/project") || path.hasPrefix("/settings")
             case .codex:
-                let path = url.path
-                return path == "/" || path.hasPrefix("/c/") || path.hasPrefix("/codex")
+                let loginPaths = ["/auth", "/login", "/signup"]
+                if loginPaths.contains(where: { path.hasPrefix($0) }) { return false }
+                return path == "/" || path.hasPrefix("/c/") || path.hasPrefix("/g/")
+                    || path.hasPrefix("/codex") || path.hasPrefix("/gpts")
             default:
-                // Generic fallback: any navigation to a known success host counts.
                 return true
             }
         }

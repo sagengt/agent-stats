@@ -24,6 +24,10 @@ final class AuthCoordinator: ObservableObject {
     /// The account key currently being authenticated; `nil` when idle.
     @Published var authenticatingAccountKey: AccountKey?
 
+    /// Incremented every time an account is successfully activated.
+    /// Observers (e.g. ProvidersSettingsTab) can react to this to reload.
+    @Published var activationCount: Int = 0
+
     // MARK: Dependencies
 
     private let credentialStore: CredentialStore
@@ -97,6 +101,12 @@ final class AuthCoordinator: ObservableObject {
         userAgent: String?,
         for accountKey: AccountKey
     ) async {
+        // Guard against duplicate captures (WebView can fire multiple times)
+        guard isAuthenticating, authenticatingAccountKey == accountKey else {
+            AppLogger.log("[AuthCoordinator] Ignoring duplicate/stale capture for \(accountKey.accountId.prefix(8))")
+            return
+        }
+
         closeAuthWindow()
 
         guard !cookies.isEmpty || authorizationHeader != nil else {
@@ -119,8 +129,14 @@ final class AuthCoordinator: ObservableObject {
         await credentialStore.save(for: accountKey, material: material)
         await accountManager.activateAccount(accountKey)
 
+        // Try to resolve the user's email or name from the service API
+        // and update the account label accordingly.
+        await resolveAccountLabel(for: accountKey, material: material)
+
         isAuthenticating = false
         authenticatingAccountKey = nil
+        activationCount += 1
+        AppLogger.log("[AuthCoordinator] Account activated: \(accountKey)")
     }
 
     /// Called by `OAuthWebView.Coordinator` when the login flow encounters an error.
@@ -130,6 +146,73 @@ final class AuthCoordinator: ObservableObject {
         isAuthenticating = false
         await accountManager.discardProvisional(accountKey)
         authenticatingAccountKey = nil
+    }
+
+    // MARK: Account label resolution
+
+    /// Attempts to fetch the user's email or name from the service API
+    /// and updates the account label from the default "Claude Code" etc.
+    private func resolveAccountLabel(for key: AccountKey, material: CredentialMaterial) async {
+        let apiClient = APIClient.shared
+
+        var headers: [String: String] = [:]
+        let cookieHeader = material.httpCookies()
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
+        if !cookieHeader.isEmpty { headers["Cookie"] = cookieHeader }
+        if let auth = material.authorizationHeader { headers["Authorization"] = auth }
+        if let ua = material.userAgent { headers["User-Agent"] = ua }
+        headers["Accept"] = "application/json"
+
+        do {
+            switch key.serviceType {
+            case .claude:
+                // Try multiple endpoints to get user info
+                let endpoints = [
+                    "https://claude.ai/api/auth/user",
+                    "https://claude.ai/api/account"
+                ]
+                for endpoint in endpoints {
+                    do {
+                        let url = URL(string: endpoint)!
+                        let data = try await apiClient.fetchRaw(from: url, headers: headers)
+                        let preview = String(data: data.prefix(500), encoding: .utf8) ?? ""
+                        AppLogger.log("[AuthCoordinator] \(endpoint) response: \(preview)")
+                        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            let email = json["email_address"] as? String
+                                ?? json["email"] as? String
+                            let name = json["full_name"] as? String
+                                ?? json["name"] as? String
+                            if let label = email ?? name {
+                                AppLogger.log("[AuthCoordinator] Resolved Claude label: \(label)")
+                                await accountManager.updateLabel(for: key, label: label)
+                                break
+                            }
+                        }
+                    } catch {
+                        AppLogger.log("[AuthCoordinator] \(endpoint) failed: \(error.localizedDescription)")
+                        continue
+                    }
+                }
+
+            case .codex:
+                // Try /backend-api/me
+                let url = URL(string: "https://chatgpt.com/backend-api/me")!
+                let data = try await apiClient.fetchRaw(from: url, headers: headers)
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let email = json["email"] as? String
+                    let name = json["name"] as? String
+                    let label = email ?? name ?? key.serviceType.displayName
+                    await accountManager.updateLabel(for: key, label: label)
+                }
+
+            default:
+                break
+            }
+        } catch {
+            AppLogger.log("[AuthCoordinator] Could not resolve account label: \(error.localizedDescription)")
+            // Non-fatal — keep the default label.
+        }
     }
 
     // MARK: Private helpers

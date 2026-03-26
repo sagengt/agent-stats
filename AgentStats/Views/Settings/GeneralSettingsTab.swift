@@ -65,16 +65,6 @@ struct GeneralSettingsTab: View {
                     .font(.headline)
             }
 
-            Divider()
-                .padding(.vertical, 4)
-
-            // Language
-            Section {
-                languageSection
-            } header: {
-                Text("Language")
-                    .font(.headline)
-            }
         }
         .formStyle(.grouped)
         .padding(20)

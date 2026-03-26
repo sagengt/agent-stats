@@ -124,7 +124,11 @@ actor RefreshOrchestrator {
     /// Results for quiesced accounts are silently dropped before writing.
     private func performRefresh() async {
         let providers = await providerStore.allProviders()
-        guard !providers.isEmpty else { return }
+        AppLogger.log("[RefreshOrchestrator] performRefresh: \(providers.count) provider(s)")
+        guard !providers.isEmpty else {
+            AppLogger.log("[RefreshOrchestrator] No providers registered — skipping refresh")
+            return
+        }
 
         var collectedResults: [ServiceUsageResult] = []
 
@@ -146,6 +150,19 @@ actor RefreshOrchestrator {
             }
         }
 
+        AppLogger.log("[RefreshOrchestrator] Collected \(collectedResults.count) result(s)")
+        for r in collectedResults {
+            let dataDesc = r.displayData.map { d -> String in
+                switch d {
+                case .quota(let q): return "quota(\(q.id):\(Int(q.usedPercentage*100))%)"
+                case .tokenSummary(let t): return "tokens(\(t.totalTokens))"
+                case .activity(let a): return "activity(\(a.requestCount)req)"
+                case .unavailable(let reason): return "unavailable(\(reason.prefix(40)))"
+                }
+            }
+            AppLogger.log("[RefreshOrchestrator]   \(r.serviceType): \(dataDesc.joined(separator: ", "))")
+        }
+
         guard !collectedResults.isEmpty else { return }
 
         await resultStore.update(results: collectedResults)
@@ -157,7 +174,12 @@ actor RefreshOrchestrator {
     private static func fetchResult(
         from provider: any UsageProviderProtocol
     ) async -> ServiceUsageResult? {
-        guard await provider.isConfigured() else { return nil }
+        let configured = await provider.isConfigured()
+        AppLogger.log("[RefreshOrchestrator] fetchResult for \(provider.serviceType) [\(provider.account.accountId.prefix(8))]: isConfigured=\(configured)")
+        guard configured else {
+            AppLogger.log("[RefreshOrchestrator]   SKIPPED — provider not configured")
+            return nil
+        }
 
         let key = provider.account
 

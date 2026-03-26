@@ -45,7 +45,13 @@ struct MenuBarContentView: View {
             actionView
         }
         .padding(.vertical, 4)
-        .frame(minWidth: 300)
+        .frame(minWidth: 360, idealWidth: 400)
+        .task {
+            // Trigger initial refresh on first appearance.
+            if viewModel.results.isEmpty {
+                viewModel.refresh()
+            }
+        }
         .popover(isPresented: $showingDetailPopover, arrowEdge: .trailing) {
             DetailPopoverView()
                 .environmentObject(viewModel)
@@ -172,6 +178,10 @@ struct MenuBarContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .keyboardShortcut(",", modifiers: .command)
+            .onAppear {
+                // Ensure the app can show windows (menu bar apps are .accessory by default)
+                NSApplication.shared.setActivationPolicy(.accessory)
+            }
 
             Button {
                 NSApplication.shared.terminate(nil)

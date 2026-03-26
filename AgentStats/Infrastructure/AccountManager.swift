@@ -65,6 +65,10 @@ actor AccountManager {
         snapshot.activeAccounts.append(account)
         await providerStore.addProvider(for: account)
         persistSnapshot()
+
+        // Trigger an immediate refresh so the new account's data appears right away.
+        AppLogger.log("[AccountManager] Account activated, requesting refresh for \(key)")
+        await orchestrator.requestRefresh()
     }
 
     /// Removes a provisional account without creating a tombstone.

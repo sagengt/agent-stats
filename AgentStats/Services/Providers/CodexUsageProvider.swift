@@ -56,16 +56,12 @@ struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
         }
 
         // Step 1 — exchange session cookies for a short-lived access token.
-        // The `/api/auth/session` endpoint accepts cookies and returns a JSON
-        // body containing `{ "accessToken": "Bearer …" }`.
         let accessToken: String
         do {
             accessToken = try await fetchAccessToken(using: credential)
-        } catch APIError.unauthorized {
-            throw ProviderError.notAuthenticated
-        } catch let providerError as ProviderError {
-            throw providerError
+            AppLogger.log("[CodexProvider] Got access token: \(accessToken.prefix(20))...")
         } catch {
+            AppLogger.log("[CodexProvider] Token exchange failed: \(error)")
             throw ProviderError.fetchFailed("Session token exchange failed: \(error.localizedDescription)")
         }
 

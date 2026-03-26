@@ -76,6 +76,14 @@ struct AgentStatsApp: App {
         Task {
             await ThresholdNotificationManager.requestAuthorization()
         }
+
+        // Kick off initial refresh + auto-refresh on launch.
+        let orch = orchestrator
+        Task {
+            AppLogger.log("[AgentStatsApp] Starting initial refresh (\(snapshot.activeAccounts.count) active account(s))")
+            await orch.requestRefresh()
+            await orch.startAutoRefresh(interval: 300) // 5 minutes
+        }
     }
 
     // MARK: Preferences
@@ -99,16 +107,21 @@ struct AgentStatsApp: App {
             menuBarLabel
         }
         .menuBarExtraStyle(.window)
-        .onChange(of: viewModel.results) { _, newResults in
+        .onChange(of: viewModel.lastRefreshedAt) { _, _ in
             // Evaluate thresholds after every result update.
-            Task { await notificationManager.evaluate(results: newResults) }
+            Task { await notificationManager.evaluate(results: viewModel.results) }
         }
+        // IMPORTANT: Kick off the initial refresh + auto-refresh on app launch.
+        // Without this, results remain empty until the user manually clicks Refresh.
 
         Settings {
             SettingsTabView(historyStore: historyStore)
                 .environmentObject(authCoordinator)
                 .environmentObject(viewModel)
                 .environmentObject(languageManager)
+                .onAppear {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                }
         }
     }
 
