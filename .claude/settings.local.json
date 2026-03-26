@@ -26,7 +26,9 @@
       "Bash(security find-generic-password:*)",
       "Bash(defaults export:*)",
       "Bash(open /tmp/AgentStats.app echo 'Launched! Login to Codex via Settings > Services > ChatGPT Codex > +' sleep 120 echo '=== CODEX LOGS ===' cat '$HOME/Library/Application Support/AgentStats/debug.log')",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Read(//Users/seiji/.gemini/**)",
+      "Bash(open /tmp/AgentStats.app sleep 10 echo '=== GEMINI AUTO-DETECT ===' cat '$HOME/Library/Application Support/AgentStats/debug.log')"
     ]
   }
 }

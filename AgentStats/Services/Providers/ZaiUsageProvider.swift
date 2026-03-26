@@ -1,195 +1,105 @@
 import Foundation
 
-/// Fetches Z.ai Coding Plan quota windows from the Z.ai REST API.
+/// Fetches Z.ai Coding Plan usage from the Z.ai API.
 ///
-/// Authentication uses an API key stored via `CredentialStore`. The key is
-/// forwarded in the `Authorization` header as `Bearer <key>`.
+/// Authentication: API key (Bearer token)
+/// Endpoint: GET https://api.z.ai/api/monitor/usage/quota/limit
 ///
-/// Z.ai Coding Plan exposes rolling quota windows similar to Claude Code;
-/// the provider maps the API response into `QuotaWindow` values that the
-/// shared UI can render.
-///
-/// Implements `QuotaWindowProvider` and `CredentialRequired` (API key).
+/// See docs/zai-integration-spec.md for details.
 struct ZaiUsageProvider: QuotaWindowProvider, CredentialRequired {
-
-    // MARK: Protocol requirements
 
     let account: AccountKey
     var serviceType: ServiceType { account.serviceType }
     let authMethod: AuthMethod = .apiKey
 
-    // MARK: Dependencies
-
     private let credentialStore: CredentialStore
     private let apiClient: APIClient
 
-    // MARK: Init
-
-    init(
-        account: AccountKey,
-        credentialStore: CredentialStore,
-        apiClient: APIClient = .shared
-    ) {
+    init(account: AccountKey, credentialStore: CredentialStore, apiClient: APIClient = .shared) {
         self.account = account
         self.credentialStore = credentialStore
         self.apiClient = apiClient
     }
 
-    // MARK: UsageProviderProtocol
-
     func isConfigured() async -> Bool {
-        guard let credential = await credentialStore.load(for: account) else { return false }
-        return !credential.needsReauth
+        guard let cred = await credentialStore.load(for: account) else { return false }
+        return cred.authorizationHeader != nil
     }
-
-    // MARK: QuotaWindowProvider
 
     func fetchQuotaWindows() async throws -> [QuotaWindow] {
-        guard let credential = await credentialStore.load(for: account) else {
+        AppLogger.log("[ZaiProvider] fetchQuotaWindows START")
+
+        guard let cred = await credentialStore.load(for: account),
+              let apiKey = cred.authorizationHeader else {
             throw ProviderError.notAuthenticated
         }
 
-        guard !credential.needsReauth else {
-            throw ProviderError.notAuthenticated
-        }
+        let key = apiKey.hasPrefix("Bearer ") ? String(apiKey.dropFirst(7)) : apiKey
+        let url = URL(string: "https://api.z.ai/api/monitor/usage/quota/limit")!
 
-        guard let apiKey = extractAPIKey(from: credential) else {
-            throw ProviderError.notAuthenticated
-        }
-
-        let headers = buildHeaders(apiKey: apiKey)
-        let url = URL(string: "https://api.z.ai/v1/usage/quota")!
-
-        do {
-            let raw = try await apiClient.fetchRaw(from: url, headers: headers)
-            return try parseQuotaWindows(from: raw)
-        } catch APIError.unauthorized {
-            throw ProviderError.notAuthenticated
-        } catch let providerError as ProviderError {
-            throw providerError
-        } catch {
-            throw ProviderError.fetchFailed(error.localizedDescription)
-        }
-    }
-
-    // MARK: Private helpers
-
-    private func buildHeaders(apiKey: String) -> [String: String] {
-        [
-            "Authorization": "Bearer \(apiKey)",
-            "Accept":        "application/json",
-            "Content-Type":  "application/json",
-            "User-Agent":    "AgentStats/1.0 macOS",
+        // Try Bearer format first
+        var headers: [String: String] = [
+            "Authorization": "Bearer \(key)",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en"
         ]
-    }
-
-    private func extractAPIKey(from credential: CredentialMaterial) -> String? {
-        if let header = credential.authorizationHeader, !header.isEmpty {
-            return header.hasPrefix("Bearer ") ? String(header.dropFirst(7)) : header
-        }
-        return nil
-    }
-
-    /// Parses the Z.ai quota API response.
-    ///
-    /// Expected response shape (approximate):
-    /// ```json
-    /// {
-    ///   "quota": {
-    ///     "daily": {
-    ///       "used_percentage": 0.35,
-    ///       "reset_at": "2025-01-28T00:00:00Z"
-    ///     },
-    ///     "monthly": {
-    ///       "used_percentage": 0.12,
-    ///       "reset_at": "2025-02-01T00:00:00Z"
-    ///     }
-    ///   }
-    /// }
-    /// ```
-    private func parseQuotaWindows(from data: Data) throws -> [QuotaWindow] {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy  = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .iso8601
 
         do {
-            let envelope = try decoder.decode(ZaiQuotaEnvelope.self, from: data)
-            return envelope.toQuotaWindows()
-        } catch {
-            throw ProviderError.parseError(error.localizedDescription)
+            let data = try await apiClient.fetchRaw(from: url, headers: headers)
+            let preview = String(data: data.prefix(500), encoding: .utf8) ?? ""
+            AppLogger.log("[ZaiProvider] Response: \(preview)")
+            return parseResponse(data)
+        } catch APIError.unauthorized {
+            // Retry with raw key
+            AppLogger.log("[ZaiProvider] Bearer failed, retrying with raw key")
+            headers["Authorization"] = key
+            let data = try await apiClient.fetchRaw(from: url, headers: headers)
+            return parseResponse(data)
         }
     }
-}
 
-// MARK: - Response models (private)
+    private func parseResponse(_ data: Data) -> [QuotaWindow] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataObj = json["data"] as? [String: Any],
+              let limits = dataObj["limits"] as? [[String: Any]] else {
+            AppLogger.log("[ZaiProvider] Failed to parse response")
+            return [QuotaWindow(id: "zai", label: "Usage", usedPercentage: 0, resetAt: nil)]
+        }
 
-private struct ZaiQuotaEnvelope: Decodable {
-    struct WindowDetail: Decodable {
-        let usedPercentage: Double?
-        let used:           Int?
-        let limit:          Int?
-        let resetAt:        Date?
-    }
-
-    struct QuotaContainer: Decodable {
-        let daily:   WindowDetail?
-        let weekly:  WindowDetail?
-        let monthly: WindowDetail?
-    }
-
-    let quota: QuotaContainer?
-
-    func toQuotaWindows() -> [QuotaWindow] {
         var windows: [QuotaWindow] = []
 
-        func percentage(from detail: WindowDetail?) -> Double {
-            guard let d = detail else { return 0 }
-            if let pct = d.usedPercentage {
-                return max(0, min(1, pct))
+        for limit in limits {
+            let type = limit["type"] as? String ?? "unknown"
+            let nextReset = limit["nextResetTime"] as? Double
+            let resetAt = nextReset.map { Date(timeIntervalSince1970: $0 / 1000.0) }
+
+            switch type {
+            case "TOKENS_LIMIT":
+                let pct = (limit["percentage"] as? Double ?? 0) / 100.0
+                windows.append(QuotaWindow(id: "5h", label: "5 Hour", usedPercentage: pct, resetAt: resetAt))
+
+            case "TIME_LIMIT":
+                let usage = limit["usage"] as? Double ?? 0
+                let current = limit["currentValue"] as? Double ?? 0
+                let pct = usage > 0 ? min(1.0, current / usage) : 0
+                windows.append(QuotaWindow(id: "monthly", label: "Monthly", usedPercentage: pct, resetAt: resetAt))
+
+            default:
+                if let pct = limit["percentage"] as? Double {
+                    windows.append(QuotaWindow(id: type.lowercased(), label: type, usedPercentage: pct / 100.0, resetAt: resetAt))
+                }
             }
-            if let used = d.used, let limit = d.limit, limit > 0 {
-                return max(0, min(1, Double(used) / Double(limit)))
-            }
-            return 0
         }
 
-        if let daily = quota?.daily {
-            windows.append(QuotaWindow(
-                id:             "zai-daily",
-                label:          "Daily",
-                usedPercentage: percentage(from: daily),
-                resetAt:        daily.resetAt
-            ))
+        if let level = dataObj["level"] as? String {
+            AppLogger.log("[ZaiProvider] Plan level: \(level)")
         }
 
-        if let weekly = quota?.weekly {
-            windows.append(QuotaWindow(
-                id:             "zai-weekly",
-                label:          "Weekly",
-                usedPercentage: percentage(from: weekly),
-                resetAt:        weekly.resetAt
-            ))
-        }
-
-        if let monthly = quota?.monthly {
-            windows.append(QuotaWindow(
-                id:             "zai-monthly",
-                label:          "Monthly",
-                usedPercentage: percentage(from: monthly),
-                resetAt:        monthly.resetAt
-            ))
-        }
-
-        // Provide a placeholder when the API returns no recognisable windows.
         if windows.isEmpty {
-            windows.append(QuotaWindow(
-                id:             "zai-unknown",
-                label:          "Usage",
-                usedPercentage: 0,
-                resetAt:        nil
-            ))
+            windows.append(QuotaWindow(id: "zai", label: "Connected", usedPercentage: 0, resetAt: nil))
         }
 
+        AppLogger.log("[ZaiProvider] Parsed \(windows.count) window(s)")
         return windows
     }
 }

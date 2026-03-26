@@ -79,8 +79,27 @@ struct ProvidersSettingsTab: View {
         }
         .onChange(of: authCoordinator.isAuthenticating) { _, isAuth in
             if !isAuth {
-                // Reload when auth flow ends (success or cancel).
                 Task { await loadAccounts() }
+            }
+        }
+        .sheet(isPresented: $authCoordinator.showingAPIKeyInput) {
+            if let service = authCoordinator.apiKeyInputService {
+                APIKeySheet(service: service) { key in
+                    Task { await authCoordinator.submitAPIKey(key, for: service) }
+                } onCancel: {
+                    authCoordinator.showingAPIKeyInput = false
+                    authCoordinator.apiKeyInputService = nil
+                }
+            }
+        }
+        .sheet(isPresented: $authCoordinator.showingPATInput) {
+            if let service = authCoordinator.patInputService {
+                APIKeySheet(service: service, title: "Personal Access Token", placeholder: "ghp_...") { token in
+                    Task { await authCoordinator.submitPAT(token, for: service) }
+                } onCancel: {
+                    authCoordinator.showingPATInput = false
+                    authCoordinator.patInputService = nil
+                }
             }
         }
     }
@@ -280,6 +299,51 @@ private struct AccountRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .background(Color.primary.opacity(0.03))
+    }
+}
+
+// MARK: - APIKeySheet
+
+private struct APIKeySheet: View {
+    let service: ServiceType
+    var title: String = "API Key"
+    var placeholder: String = "Enter your API key..."
+    let onSubmit: (String) -> Void
+    let onCancel: () -> Void
+
+    @State private var key = ""
+
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Image(systemName: service.iconSystemName)
+                    .foregroundStyle(service.color)
+                    .font(.title2)
+                Text("Add \(service.displayName) \(title)")
+                    .font(.headline)
+            }
+
+            Text("Enter your \(title.lowercased()) to connect \(service.displayName).")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            SecureField(placeholder, text: $key)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 350)
+
+            HStack {
+                Button("Cancel") { onCancel() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Connect") {
+                    onSubmit(key)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
     }
 }
 

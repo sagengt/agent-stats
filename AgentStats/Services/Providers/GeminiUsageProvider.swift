@@ -1,196 +1,177 @@
 import Foundation
 
-/// Fetches Google Gemini token usage from local Gemini CLI log files.
+/// Fetches Google Gemini CLI usage data.
 ///
-/// The Gemini CLI writes JSON usage logs to `~/.gemini/logs/` (one file per
-/// day). If no local logs are found the provider returns a zero-usage summary
-/// rather than throwing, so the UI still renders the service row.
+/// Authentication: Reads OAuth token from ~/.gemini/oauth_creds.json
+/// or macOS Keychain (gemini-cli-oauth service).
+/// Account info: Reads email from ~/.gemini/google_accounts.json.
+/// Quota: Calls https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota
 ///
-/// Implements `TokenUsageProvider` and `CredentialRequired` (API key).
-struct GeminiUsageProvider: TokenUsageProvider, CredentialRequired {
-
-    // MARK: Protocol requirements
+/// See docs/gemini-integration-spec.md for details.
+struct GeminiUsageProvider: QuotaWindowProvider, CredentialRequired {
 
     let account: AccountKey
     var serviceType: ServiceType { account.serviceType }
     let authMethod: AuthMethod = .apiKey
 
-    // MARK: Dependencies
-
     private let credentialStore: CredentialStore
     private let apiClient: APIClient
 
-    // MARK: Init
-
-    init(
-        account: AccountKey,
-        credentialStore: CredentialStore,
-        apiClient: APIClient = .shared
-    ) {
+    init(account: AccountKey, credentialStore: CredentialStore, apiClient: APIClient = .shared) {
         self.account = account
         self.credentialStore = credentialStore
         self.apiClient = apiClient
     }
 
-    // MARK: UsageProviderProtocol
-
     func isConfigured() async -> Bool {
-        guard let credential = await credentialStore.load(for: account) else { return false }
-        return !credential.needsReauth
+        if readLocalAccessToken() != nil { return true }
+        guard let cred = await credentialStore.load(for: account) else { return false }
+        return !cred.needsReauth
     }
 
-    // MARK: TokenUsageProvider
+    func fetchQuotaWindows() async throws -> [QuotaWindow] {
+        AppLogger.log("[GeminiProvider] fetchQuotaWindows START")
 
-    func fetchTokenUsage() async throws -> TokenUsageSummary {
-        // Prefer local CLI logs; they are available without a network round-trip
-        // and do not consume API quota.
-        if let localSummary = try? await readLocalLogs() {
-            return localSummary
+        // Strategy 1: Use local Gemini CLI OAuth token
+        if let token = readLocalAccessToken() {
+            AppLogger.log("[GeminiProvider] Using local OAuth token")
+            do {
+                return try await fetchQuotaWithToken(token)
+            } catch {
+                AppLogger.log("[GeminiProvider] Quota failed: \(error), trying refresh...")
+                if let refreshed = try? await refreshToken() {
+                    return try await fetchQuotaWithToken(refreshed)
+                }
+            }
         }
 
-        // Fall back to the Gemini REST API when a local log is unavailable.
-        guard let credential = await credentialStore.load(for: account) else {
-            throw ProviderError.notAuthenticated
+        // Strategy 2: Use stored API key
+        if let cred = await credentialStore.load(for: account),
+           let apiKey = cred.authorizationHeader {
+            let key = apiKey.replacingOccurrences(of: "Bearer ", with: "")
+            return try await fetchQuotaWithToken(key)
         }
 
-        guard !credential.needsReauth else {
-            throw ProviderError.notAuthenticated
-        }
-
-        guard let apiKey = extractAPIKey(from: credential) else {
-            throw ProviderError.notAuthenticated
-        }
-
-        return try await fetchFromAPI(apiKey: apiKey)
+        throw ProviderError.notAuthenticated
     }
 
-    // MARK: Local log reading
+    // MARK: - Local token
 
-    /// Scans `~/.gemini/logs/` for today's usage log and sums token counts.
-    ///
-    /// The Gemini CLI writes one JSON object per line in files named
-    /// `YYYY-MM-DD.jsonl`.  Each object may contain a `usageMetadata` key
-    /// with `promptTokenCount` and `candidatesTokenCount` integers.
-    private func readLocalLogs() async throws -> TokenUsageSummary {
+    private func readLocalAccessToken() -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let logsDir = home
-            .appendingPathComponent(".gemini")
-            .appendingPathComponent("logs")
-
-        guard FileManager.default.fileExists(atPath: logsDir.path) else {
-            throw ProviderError.fetchFailed("Gemini CLI log directory not found at \(logsDir.path)")
-        }
-
-        let today = todayDateString()
-        let todayFile = logsDir.appendingPathComponent("\(today).jsonl")
-
-        // Try today's file first; if absent scan whatever is newest.
-        let targetFile: URL
-        if FileManager.default.fileExists(atPath: todayFile.path) {
-            targetFile = todayFile
-        } else {
-            // Find most-recently modified .jsonl file in the logs directory.
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: logsDir,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: .skipsHiddenFiles
-            )
-            let jsonlFiles = contents.filter { $0.pathExtension == "jsonl" }
-            guard let newest = jsonlFiles.max(by: { a, b in
-                let dateA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                let dateB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                return dateA < dateB
-            }) else {
-                throw ProviderError.fetchFailed("No Gemini CLI log files found in \(logsDir.path)")
-            }
-            targetFile = newest
-        }
-
-        return try parseJSONLFile(at: targetFile)
-    }
-
-    private func parseJSONLFile(at url: URL) throws -> TokenUsageSummary {
-        let raw: String
-        do {
-            raw = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw ProviderError.fetchFailed("Could not read Gemini log file: \(error.localizedDescription)")
-        }
-
-        var inputTokens  = 0
-        var outputTokens = 0
-
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-
-        for line in raw.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty,
-                  let data = trimmed.data(using: .utf8) else { continue }
-
-            // Each line may be a full request/response log entry.
-            // We tolerate parse failures on individual lines.
-            if let entry = try? decoder.decode(GeminiLogEntry.self, from: data) {
-                inputTokens  += entry.usageMetadata?.promptTokenCount     ?? 0
-                outputTokens += entry.usageMetadata?.candidatesTokenCount ?? 0
+        let path = home.appendingPathComponent(".gemini/oauth_creds.json")
+        guard let data = try? Data(contentsOf: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = json["access_token"] as? String, !token.isEmpty else { return nil }
+        if let expiry = json["expiry_date"] as? Double {
+            let expiryDate = Date(timeIntervalSince1970: expiry / 1000.0)
+            if expiryDate <= Date() {
+                AppLogger.log("[GeminiProvider] Token expired")
+                return nil
             }
         }
-
-        return TokenUsageSummary(
-            totalTokens:  inputTokens + outputTokens,
-            inputTokens:  inputTokens,
-            outputTokens: outputTokens,
-            costUSD:      nil,
-            period:       .today
-        )
+        return token
     }
 
-    // MARK: API fallback
-
-    private func fetchFromAPI(apiKey: String) async throws -> TokenUsageSummary {
-        // The Gemini REST API does not expose a dedicated usage/billing endpoint
-        // accessible via API key (billing is managed via Google Cloud Console).
-        // Return a zero-usage summary with a diagnostic note so the row is
-        // visible but clearly indicates that live data is unavailable.
-        //
-        // Future: once a usage endpoint is published, replace this stub.
-        _ = apiKey // suppress unused-variable warning
-        return TokenUsageSummary(
-            totalTokens:  0,
-            inputTokens:  0,
-            outputTokens: 0,
-            costUSD:      nil,
-            period:       .today
-        )
+    private func readRefreshToken() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let path = home.appendingPathComponent(".gemini/oauth_creds.json")
+        guard let data = try? Data(contentsOf: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["refresh_token"] as? String
     }
 
-    // MARK: Private helpers
+    private func refreshToken() async throws -> String? {
+        guard let refreshToken = readRefreshToken() else { return nil }
 
-    private func extractAPIKey(from credential: CredentialMaterial) -> String? {
-        // API key providers store the key in `authorizationHeader` as a raw
-        // string (without a `Bearer ` prefix) or as the first cookie value.
-        if let header = credential.authorizationHeader, !header.isEmpty {
-            // Strip "Bearer " prefix if present to obtain the raw key.
-            return header.hasPrefix("Bearer ") ? String(header.dropFirst(7)) : header
+        // Read client credentials from the Gemini CLI's own oauth_creds.json or environment
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let oauthPath = home.appendingPathComponent(".gemini/oauth_creds.json")
+        guard let oauthData = try? Data(contentsOf: oauthPath),
+              let oauthJson = try? JSONSerialization.jsonObject(with: oauthData) as? [String: Any] else {
+            return nil
         }
-        return nil
+
+        // The client_id and client_secret are embedded in the Gemini CLI's distributed
+        // configuration (public "installed application" credentials). We read them from
+        // the CLI's own config rather than hardcoding them.
+        let clientId = oauthJson["client_id"] as? String
+            ?? ProcessInfo.processInfo.environment["GEMINI_OAUTH_CLIENT_ID"]
+            ?? ""
+        let clientSecret = oauthJson["client_secret"] as? String
+            ?? ProcessInfo.processInfo.environment["GEMINI_OAUTH_CLIENT_SECRET"]
+            ?? ""
+
+        guard !clientId.isEmpty, !clientSecret.isEmpty else {
+            AppLogger.log("[GeminiProvider] No client credentials for token refresh")
+            return nil
+        }
+
+        var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = "grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(clientId)&client_secret=\(clientSecret)".data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let newToken = json["access_token"] as? String else { return nil }
+
+        // Update local file
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let path = home.appendingPathComponent(".gemini/oauth_creds.json")
+        if var creds = (try? Data(contentsOf: path)).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) {
+            creds["access_token"] = newToken
+            creds["expiry_date"] = (Date().timeIntervalSince1970 + Double(json["expires_in"] as? Int ?? 3600)) * 1000.0
+            if let updated = try? JSONSerialization.data(withJSONObject: creds, options: [.prettyPrinted]) {
+                try? updated.write(to: path)
+            }
+        }
+        AppLogger.log("[GeminiProvider] Token refreshed")
+        return newToken
     }
 
-    private func todayDateString() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
-    }
-}
+    // MARK: - Quota API
 
-// MARK: - Response models (private)
+    private func fetchQuotaWithToken(_ token: String) async throws -> [QuotaWindow] {
+        let url = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!
+        let headers = ["Authorization": "Bearer \(token)", "Content-Type": "application/json", "Accept": "application/json"]
 
-private struct GeminiLogEntry: Decodable {
-    struct UsageMetadata: Decodable {
-        let promptTokenCount:     Int?
-        let candidatesTokenCount: Int?
+        let data = try await apiClient.fetchRaw(from: url, headers: headers)
+        let preview = String(data: data.prefix(500), encoding: .utf8) ?? ""
+        AppLogger.log("[GeminiProvider] Quota response: \(preview)")
+        return parseQuotaResponse(data)
     }
 
-    let usageMetadata: UsageMetadata?
+    private func parseQuotaResponse(_ data: Data) -> [QuotaWindow] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [QuotaWindow(id: "gemini", label: "Usage", usedPercentage: 0, resetAt: nil)]
+        }
+
+        var windows: [QuotaWindow] = []
+
+        if let quotas = json["quotas"] as? [[String: Any]] {
+            for q in quotas {
+                if let name = q["quotaName"] as? String ?? q["name"] as? String,
+                   let used = q["used"] as? Double, let limit = q["limit"] as? Double, limit > 0 {
+                    windows.append(QuotaWindow(id: name, label: name, usedPercentage: min(1.0, used / limit), resetAt: nil))
+                }
+            }
+        }
+
+        if windows.isEmpty {
+            AppLogger.log("[GeminiProvider] No quota data, keys: \(Array(json.keys))")
+            windows.append(QuotaWindow(id: "gemini", label: "Connected", usedPercentage: 0, resetAt: nil))
+        }
+        return windows
+    }
+
+    /// Reads email from ~/.gemini/google_accounts.json
+    static func readLocalEmail() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let path = home.appendingPathComponent(".gemini/google_accounts.json")
+        guard let data = try? Data(contentsOf: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["active"] as? String
+    }
 }

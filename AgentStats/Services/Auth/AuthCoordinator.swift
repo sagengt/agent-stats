@@ -25,8 +25,15 @@ final class AuthCoordinator: ObservableObject {
     @Published var authenticatingAccountKey: AccountKey?
 
     /// Incremented every time an account is successfully activated.
-    /// Observers (e.g. ProvidersSettingsTab) can react to this to reload.
     @Published var activationCount: Int = 0
+
+    /// API key input state
+    @Published var showingAPIKeyInput: Bool = false
+    @Published var apiKeyInputService: ServiceType?
+
+    /// PAT input state
+    @Published var showingPATInput: Bool = false
+    @Published var patInputService: ServiceType?
 
     // MARK: Dependencies
 
@@ -78,14 +85,31 @@ final class AuthCoordinator: ObservableObject {
             authenticatingAccountKey = accountKey
             openOAuthWindow(for: accountKey, loginURL: loginURL)
 
-        case .personalAccessToken, .apiKey:
-            // Token/key entry is handled by the Settings view; nothing to do here.
+        case .apiKey:
+            // For services with local auth files (Gemini), try auto-detect first
+            if service == .gemini {
+                await autoDetectGemini(service: service)
+            } else {
+                // Show API key input for Z.ai etc.
+                showingAPIKeyInput = true
+                apiKeyInputService = service
+            }
+            isAuthenticating = false
+            authenticatingAccountKey = nil
+
+        case .personalAccessToken:
+            showingPATInput = true
+            patInputService = service
             isAuthenticating = false
             authenticatingAccountKey = nil
 
         case .none:
+            // For services like Cursor/OpenCode - auto-detect local files
+            let accountKey = await accountManager.registerProvisional(service: service, label: service.displayName)
+            await accountManager.activateAccount(accountKey)
             isAuthenticating = false
             authenticatingAccountKey = nil
+            activationCount += 1
         }
     }
 
@@ -146,6 +170,76 @@ final class AuthCoordinator: ObservableObject {
         isAuthenticating = false
         await accountManager.discardProvisional(accountKey)
         authenticatingAccountKey = nil
+    }
+
+    // MARK: Gemini auto-detect
+
+    /// Auto-detects Gemini CLI credentials from ~/.gemini/
+    private func autoDetectGemini(service: ServiceType) async {
+        let accountKey = await accountManager.registerProvisional(service: service, label: service.displayName)
+
+        // Check if Gemini CLI is installed and has credentials
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let oauthPath = home.appendingPathComponent(".gemini/oauth_creds.json")
+
+        if FileManager.default.fileExists(atPath: oauthPath.path) {
+            // Gemini CLI OAuth detected — no need for manual API key
+            let label = GeminiUsageProvider.readLocalEmail() ?? service.displayName
+            await accountManager.activateAccount(accountKey)
+            await accountManager.updateLabel(for: accountKey, label: label)
+            activationCount += 1
+            AppLogger.log("[AuthCoordinator] Gemini auto-detected: \(label)")
+        } else {
+            // No local Gemini CLI — show API key input
+            await accountManager.discardProvisional(accountKey)
+            showingAPIKeyInput = true
+            apiKeyInputService = service
+        }
+    }
+
+    /// Called when user submits an API key from the input view.
+    func submitAPIKey(_ key: String, for service: ServiceType) async {
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountKey = await accountManager.registerProvisional(service: service, label: service.displayName)
+
+        let material = CredentialMaterial(
+            cookies: nil,
+            authorizationHeader: "Bearer \(trimmedKey)",
+            userAgent: nil,
+            capturedAt: Date(),
+            expiresAt: nil
+        )
+
+        await credentialStore.save(for: accountKey, material: material)
+        await accountManager.activateAccount(accountKey)
+        activationCount += 1
+        showingAPIKeyInput = false
+        apiKeyInputService = nil
+        AppLogger.log("[AuthCoordinator] API key saved for \(service)")
+    }
+
+    /// Called when user submits a PAT from the input view.
+    func submitPAT(_ token: String, for service: ServiceType) async {
+        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountKey = await accountManager.registerProvisional(service: service, label: service.displayName)
+
+        let material = CredentialMaterial(
+            cookies: nil,
+            authorizationHeader: "token \(trimmedToken)",
+            userAgent: nil,
+            capturedAt: Date(),
+            expiresAt: nil
+        )
+
+        await credentialStore.save(for: accountKey, material: material)
+        await accountManager.activateAccount(accountKey)
+        activationCount += 1
+        showingPATInput = false
+        patInputService = nil
     }
 
     // MARK: Account label resolution
