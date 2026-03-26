@@ -9,6 +9,7 @@ let package = Package(
             name: "AgentStats",
             path: "AgentStats",
             exclude: ["App/AgentStatsApp.swift"],  // @main excluded for library target
+            resources: [.process("Assets.xcassets")],
             swiftSettings: [.define("TESTING")]
         ),
         .testTarget(

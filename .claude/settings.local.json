@@ -28,7 +28,28 @@
       "Bash(open /tmp/AgentStats.app echo 'Launched! Login to Codex via Settings > Services > ChatGPT Codex > +' sleep 120 echo '=== CODEX LOGS ===' cat '$HOME/Library/Application Support/AgentStats/debug.log')",
       "WebFetch(domain:github.com)",
       "Read(//Users/seiji/.gemini/**)",
-      "Bash(open /tmp/AgentStats.app sleep 10 echo '=== GEMINI AUTO-DETECT ===' cat '$HOME/Library/Application Support/AgentStats/debug.log')"
+      "Bash(open /tmp/AgentStats.app sleep 10 echo '=== GEMINI AUTO-DETECT ===' cat '$HOME/Library/Application Support/AgentStats/debug.log')",
+      "WebFetch(domain:chatgpt.com)",
+      "WebFetch(domain:openai.com)",
+      "WebFetch(domain:cursor.com)",
+      "WebFetch(domain:anthropic.com)",
+      "WebFetch(domain:z.ai)",
+      "WebFetch(domain:chat.z.ai)",
+      "Bash(magick claude_favicon.ico[1] -resize 32x32 claude.png)",
+      "Bash(magick 'copilot_favicon.ico[1]' -resize 32x32 copilot_tmp.png)",
+      "Bash(magick 'cursor_favicon.ico[1]' -resize 32x32 cursor_from_ico.png)",
+      "Bash(magick gemini_favicon.png -resize 32x32 gemini.png)",
+      "Bash(magick cursor_apple.png -resize 32x32 cursor.png)",
+      "Bash(magick -background none zai_logo.svg -resize 32x32 zai.png)",
+      "Bash(magick copilot_gh.png -resize 32x32 copilot.png)",
+      "Bash(magick copilot_icon.svg -background none -resize 32x32 copilot_from_svg.png)",
+      "Bash(magick codex_gh.png -resize 32x32 codex.png)",
+      "Bash(magick opencode_gh.png -resize 32x32 opencode.png)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Bash(magick identify:*)",
+      "Bash(done)",
+      "Bash(magick 'claude_app_favicon.ico[1]' -resize 32x32 claude.png)"
     ]
   }
 }

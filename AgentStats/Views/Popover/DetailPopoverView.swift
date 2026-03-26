@@ -120,7 +120,7 @@ private struct ServiceSectionView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: serviceType.iconSystemName)
+                    serviceType.iconImage
                         .foregroundStyle(serviceType.color)
                         .font(.system(size: 13, weight: .semibold))
                         .frame(width: 18)

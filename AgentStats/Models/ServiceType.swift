@@ -51,7 +51,7 @@ enum ServiceType: String, Sendable, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// SF Symbol name representing the service in system UI.
+    /// SF Symbol name representing the service in system UI (fallback).
     var iconSystemName: String {
         switch self {
         case .claude:    return "sparkle"
@@ -62,6 +62,34 @@ enum ServiceType: String, Sendable, Codable, CaseIterable, Identifiable {
         case .opencode:  return "chevron.left.forwardslash.chevron.right"
         case .zai:       return "bolt.circle"
         }
+    }
+
+    /// Asset Catalog image name for the official service logo.
+    var iconImageName: String {
+        "icon-\(rawValue)"
+    }
+
+    /// Returns a SwiftUI view with the official logo, falling back to SF Symbol.
+    @ViewBuilder
+    var iconImage: some View {
+        if let nsImage = Self.loadIcon(named: iconImageName) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: iconSystemName)
+        }
+    }
+
+    /// Loads an icon from Asset Catalog or bundle Resources.
+    private static func loadIcon(named name: String) -> NSImage? {
+        // Try Asset Catalog first (Xcode builds)
+        if let img = NSImage(named: name) { return img }
+        // Fallback: bundle Resources directory (swiftc builds)
+        if let url = Bundle.main.url(forResource: name, withExtension: "png") {
+            return NSImage(contentsOf: url)
+        }
+        return nil
     }
 }
 

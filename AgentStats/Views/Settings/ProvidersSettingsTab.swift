@@ -155,7 +155,7 @@ private struct ServiceProviderSection: View {
         VStack(alignment: .leading, spacing: 0) {
             // Service header row
             HStack(spacing: 10) {
-                Image(systemName: service.iconSystemName)
+                service.iconImage
                     .foregroundStyle(service.color)
                     .font(.system(size: 14, weight: .semibold))
                     .frame(width: 20)
@@ -316,7 +316,7 @@ private struct APIKeySheet: View {
     var body: some View {
         VStack(spacing: 16) {
             HStack {
-                Image(systemName: service.iconSystemName)
+                service.iconImage
                     .foregroundStyle(service.color)
                     .font(.title2)
                 Text("Add \(service.displayName) \(title)")

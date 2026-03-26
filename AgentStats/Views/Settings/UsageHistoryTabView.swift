@@ -52,7 +52,7 @@ struct UsageHistoryTabView: View {
             Picker("Service", selection: $historyVM.selectedService) {
                 Text("All Services").tag(Optional<ServiceType>.none)
                 ForEach(historyVM.availableServices) { service in
-                    Label(service.displayName, systemImage: service.iconSystemName)
+                    Label { Text(service.displayName) } icon: { service.iconImage }
                         .tag(Optional(service))
                 }
             }

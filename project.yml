@@ -17,8 +17,6 @@ targets:
     platform: macOS
     sources:
       - path: AgentStats
-        excludes:
-          - "**/*.xcassets"
     settings:
       base:
         INFOPLIST_KEY_LSUIElement: true

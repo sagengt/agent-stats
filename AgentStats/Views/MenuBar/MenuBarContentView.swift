@@ -175,7 +175,7 @@ struct ServiceRowView: View {
     var body: some View {
         HStack(spacing: 8) {
             // Service icon
-            Image(systemName: result.serviceType.iconSystemName)
+            result.serviceType.iconImage
                 .foregroundStyle(result.serviceType.color)
                 .font(.system(size: 13))
                 .frame(width: 16)
