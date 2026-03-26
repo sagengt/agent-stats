@@ -38,9 +38,39 @@
 - File: `~/.gemini/settings.json`
   - `security.auth.selectedType`: `oauth-personal` | `USE_GEMINI` | `COMPUTE_ADC`
 
-## Usage/Quota API
+## Usage Tracking (AgentBar Approach — Local Log Files)
 
-### Quota Endpoint
+### Primary Method: Local Log File Scanning
+No API calls needed. Read local Gemini CLI logs from `~/.gemini/tmp/`.
+
+#### Log Directory Structure
+```
+~/.gemini/tmp/
+  ├── <project-hash-1>/logs.json
+  ├── <project-hash-2>/logs.json
+  └── ...
+```
+
+#### Log Entry Format
+```json
+[
+  {
+    "sessionId": "uuid",
+    "messageId": 0,
+    "type": "user",          // "user" = countable prompt
+    "message": "the prompt",
+    "timestamp": "2026-02-16T03:48:24.429Z"
+  }
+]
+```
+
+#### Counting Rules
+- Only count entries where `type == "user"`
+- Exclude: empty messages, messages starting with "/", "exit", "quit"
+- Count today's entries only (Pacific time zone boundary)
+- Daily limit: ~1000 requests (free tier estimate)
+
+### Fallback: Quota API (OAuth)
 ```
 POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota
 Authorization: Bearer {access_token}
