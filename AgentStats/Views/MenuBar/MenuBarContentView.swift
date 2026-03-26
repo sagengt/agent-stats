@@ -12,36 +12,14 @@ struct MenuBarContentView: View {
     @EnvironmentObject var viewModel: UsageViewModel
     @EnvironmentObject var authCoordinator: AuthCoordinator
 
-    @AppStorage(MenuBarDisplayModeKey.userDefaultsKey)
-    private var displayModeRaw: String = MenuBarDisplayMode.label.rawValue
-
     @State private var showingDetailPopover = false
-
-    private var displayMode: Binding<MenuBarDisplayMode> {
-        Binding(
-            get: { MenuBarDisplayMode(rawValue: displayModeRaw) ?? .label },
-            set: { displayModeRaw = $0.rawValue; MenuBarDisplayModeKey.save($0) }
-        )
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
             headerView
-
             Divider()
-
-            // Service rows grouped by service type
             serviceListView
-
             Divider()
-
-            // Display mode selector
-            displayModeSectionView
-
-            Divider()
-
-            // Actions
             actionView
         }
         .padding(.vertical, 4)
@@ -122,21 +100,6 @@ struct MenuBarContentView: View {
                 }
             }
             .padding(.vertical, 4)
-        }
-    }
-
-    @ViewBuilder
-    private var displayModeSectionView: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Menu Bar Style")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 12)
-                .padding(.top, 6)
-
-            MenuBarDisplayModePicker(selection: displayMode)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
         }
     }
 

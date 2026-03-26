@@ -85,15 +85,6 @@ struct AgentStatsApp: App {
         }
     }
 
-    // MARK: Preferences
-
-    @AppStorage(MenuBarDisplayModeKey.userDefaultsKey)
-    private var displayModeRaw: String = MenuBarDisplayMode.label.rawValue
-
-    private var displayMode: MenuBarDisplayMode {
-        MenuBarDisplayMode(rawValue: displayModeRaw) ?? .label
-    }
-
     // MARK: Scene
 
     var body: some Scene {
@@ -103,7 +94,7 @@ struct AgentStatsApp: App {
                 .environmentObject(authCoordinator)
                 .environmentObject(languageManager)
         } label: {
-            menuBarLabel
+            MenuBarLabelView(results: viewModel.results)
         }
         .menuBarExtraStyle(.window)
         .onChange(of: viewModel.lastRefreshedAt) { _, _ in
@@ -124,33 +115,4 @@ struct AgentStatsApp: App {
         }
     }
 
-    // MARK: Menu bar label
-
-    @ViewBuilder
-    private var menuBarLabel: some View {
-        switch displayMode {
-        case .label:
-            MenuBarLabelView(results: viewModel.results)
-
-        case .carousel:
-            StackedBarView(results: viewModel.results)
-
-        case .compact:
-            compactLabel
-        }
-    }
-
-    /// Icon-only label tinted by the highest quota usage colour.
-    private var compactLabel: some View {
-        let pct = viewModel.highestQuotaPercentage ?? 0
-        let tint: Color = {
-            switch pct {
-            case ..<0.5:  return .green
-            case ..<0.8:  return .orange
-            default:      return .red
-            }
-        }()
-        return Image(systemName: "chart.bar.fill")
-            .foregroundStyle(viewModel.results.isEmpty ? .primary : tint)
-    }
 }
