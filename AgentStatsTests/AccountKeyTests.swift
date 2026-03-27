@@ -21,14 +21,14 @@ final class AccountKeyTests: XCTestCase {
     func testDifferentServiceTypeSameAccountIdAreNotEqual() {
         let sharedId = "SHARED-ID-456"
         let key1 = AccountKey(serviceType: .claude, accountId: sharedId)
-        let key2 = AccountKey(serviceType: .copilot, accountId: sharedId)
+        let key2 = AccountKey(serviceType: .gemini, accountId: sharedId)
         XCTAssertNotEqual(key1, key2)
     }
 
     // MARK: - Codable roundtrip
 
     func testCodableRoundtrip() throws {
-        let original = AccountKey(serviceType: .cursor, accountId: "CURSOR-789")
+        let original = AccountKey(serviceType: .zai, accountId: "CURSOR-789")
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(AccountKey.self, from: data)
         XCTAssertEqual(decoded, original)
@@ -71,8 +71,8 @@ final class AccountKeyTests: XCTestCase {
 
     func testHashableEqualImpliesEqualHash() {
         let id = UUID().uuidString
-        let key1 = AccountKey(serviceType: .opencode, accountId: id)
-        let key2 = AccountKey(serviceType: .opencode, accountId: id)
+        let key1 = AccountKey(serviceType: .claude, accountId: id)
+        let key2 = AccountKey(serviceType: .claude, accountId: id)
         XCTAssertEqual(key1.hashValue, key2.hashValue)
     }
 }

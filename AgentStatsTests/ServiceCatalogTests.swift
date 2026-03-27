@@ -12,7 +12,7 @@ final class ServiceCatalogTests: XCTestCase {
             XCTFail("Expected .oauthWebView but got \(method)")
             return
         }
-        XCTAssertEqual(url.absoluteString, "https://claude.ai")
+        XCTAssertEqual(url.absoluteString, "https://claude.ai/login")
     }
 
     func testAuthMethodForCodexReturnsImportFromCLI() {
@@ -44,34 +44,4 @@ final class ServiceCatalogTests: XCTestCase {
         }
     }
 
-    // MARK: - authMethod(for:) — Personal access token
-
-    func testAuthMethodForCopilotReturnsPersonalAccessToken() {
-        let method = ServiceCatalog.authMethod(for: .copilot)
-
-        guard case .personalAccessToken = method else {
-            XCTFail("Expected .personalAccessToken but got \(method)")
-            return
-        }
-    }
-
-    // MARK: - authMethod(for:) — None
-
-    func testAuthMethodForCursorReturnsNone() {
-        let method = ServiceCatalog.authMethod(for: .cursor)
-
-        guard case .none = method else {
-            XCTFail("Expected .none but got \(method)")
-            return
-        }
-    }
-
-    func testAuthMethodForOpencodeReturnsNone() {
-        let method = ServiceCatalog.authMethod(for: .opencode)
-
-        guard case .none = method else {
-            XCTFail("Expected .none but got \(method)")
-            return
-        }
-    }
 }

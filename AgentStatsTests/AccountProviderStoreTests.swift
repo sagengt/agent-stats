@@ -103,7 +103,7 @@ final class AccountProviderStoreTests: XCTestCase {
 
     func testAddProviderMakesItRetrievableByKey() async {
         let store = TestableProviderStore(accounts: [])
-        let account = makeAccount(serviceType: .cursor)
+        let account = makeAccount(serviceType: .zai)
 
         await store.addProvider(for: account)
 

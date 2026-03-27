@@ -92,16 +92,6 @@ struct ProvidersSettingsTab: View {
                 }
             }
         }
-        .sheet(isPresented: $authCoordinator.showingPATInput) {
-            if let service = authCoordinator.patInputService {
-                APIKeySheet(service: service, title: "Personal Access Token", placeholder: "ghp_...") { token in
-                    Task { await authCoordinator.submitPAT(token, for: service) }
-                } onCancel: {
-                    authCoordinator.showingPATInput = false
-                    authCoordinator.patInputService = nil
-                }
-            }
-        }
     }
 
     // MARK: Actions

@@ -413,18 +413,11 @@ private func makePreviewResult(service: ServiceType) -> ServiceUsageResult {
             .quota(QuotaWindow(id: "weekly", label: "Weekly", usedPercentage: 0.35,
                                resetAt: Date().addingTimeInterval(86400 * 4)))
         ]
-    case .gemini, .copilot:
+    case .gemini:
         displayData = [
             .tokenSummary(TokenUsageSummary(
                 totalTokens: 1_450_000, inputTokens: 900_000, outputTokens: 550_000,
                 costUSD: 2.18, period: .thisMonth
-            ))
-        ]
-    case .cursor, .opencode:
-        displayData = [
-            .activity(SessionActivity(
-                activeSessions: 2, totalDurationMinutes: 145, requestCount: 87,
-                lastActiveAt: Date().addingTimeInterval(-300)
             ))
         ]
     }

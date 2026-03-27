@@ -238,9 +238,6 @@ struct OAuthWebView: NSViewRepresentable {
             case .claude:   return ["claude.ai"]
             case .codex:    return ["chatgpt.com"]
             case .gemini:   return ["gemini.google.com", "accounts.google.com"]
-            case .copilot:  return ["github.com"]
-            case .cursor:   return ["cursor.sh", "cursor.com"]
-            case .opencode: return ["opencode.ai"]
             case .zai:      return ["z.ai"]
             }
         }

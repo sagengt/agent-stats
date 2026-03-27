@@ -5,12 +5,12 @@ final class ServiceTypeTests: XCTestCase {
 
     // MARK: - allCases count
 
-    func testAllCasesReturnsSevenServices() {
-        XCTAssertEqual(ServiceType.allCases.count, 7)
+    func testAllCasesReturnsFourServices() {
+        XCTAssertEqual(ServiceType.allCases.count, 4)
     }
 
     func testAllCasesContainsExpectedServices() {
-        let expected: Set<ServiceType> = [.claude, .codex, .gemini, .copilot, .cursor, .opencode, .zai]
+        let expected: Set<ServiceType> = [.claude, .codex, .gemini, .zai]
         XCTAssertEqual(Set(ServiceType.allCases), expected)
     }
 
@@ -29,9 +29,6 @@ final class ServiceTypeTests: XCTestCase {
         XCTAssertEqual(ServiceType.claude.displayName,   "Claude Code")
         XCTAssertEqual(ServiceType.codex.displayName,    "ChatGPT Codex")
         XCTAssertEqual(ServiceType.gemini.displayName,   "Google Gemini")
-        XCTAssertEqual(ServiceType.copilot.displayName,  "GitHub Copilot")
-        XCTAssertEqual(ServiceType.cursor.displayName,   "Cursor")
-        XCTAssertEqual(ServiceType.opencode.displayName, "OpenCode")
         XCTAssertEqual(ServiceType.zai.displayName,      "Z.ai Coding Plan")
     }
 
@@ -50,9 +47,6 @@ final class ServiceTypeTests: XCTestCase {
         XCTAssertEqual(ServiceType.claude.shortName,   "Claude")
         XCTAssertEqual(ServiceType.codex.shortName,    "Codex")
         XCTAssertEqual(ServiceType.gemini.shortName,   "Gemini")
-        XCTAssertEqual(ServiceType.copilot.shortName,  "Copilot")
-        XCTAssertEqual(ServiceType.cursor.shortName,   "Cursor")
-        XCTAssertEqual(ServiceType.opencode.shortName, "OpenCode")
         XCTAssertEqual(ServiceType.zai.shortName,      "Z.ai")
     }
 
@@ -79,7 +73,7 @@ final class ServiceTypeTests: XCTestCase {
     }
 
     func testNonWebViewServicesReturnEmptyAllowedCookieDomains() {
-        let nonWebViewServices: [ServiceType] = [.gemini, .copilot, .cursor, .opencode, .zai]
+        let nonWebViewServices: [ServiceType] = [.gemini, .zai]
         for service in nonWebViewServices {
             XCTAssertTrue(
                 service.allowedCookieDomains.isEmpty,

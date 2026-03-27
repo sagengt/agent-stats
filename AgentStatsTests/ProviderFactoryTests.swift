@@ -72,27 +72,6 @@ final class ProviderFactoryTests: XCTestCase {
         XCTAssertTrue(provider is GeminiUsageProvider, "Expected GeminiUsageProvider but got \(type(of: provider))")
     }
 
-    func testMakeProviderForCopilotReturnsCopilotProvider() {
-        let factory = makeFactory()
-        let account = makeAccount(serviceType: .copilot)
-        let provider = factory.makeProvider(for: account)
-        XCTAssertTrue(provider is CopilotUsageProvider, "Expected CopilotUsageProvider but got \(type(of: provider))")
-    }
-
-    func testMakeProviderForCursorReturnsCursorProvider() {
-        let factory = makeFactory()
-        let account = makeAccount(serviceType: .cursor)
-        let provider = factory.makeProvider(for: account)
-        XCTAssertTrue(provider is CursorUsageProvider, "Expected CursorUsageProvider but got \(type(of: provider))")
-    }
-
-    func testMakeProviderForOpencodeReturnsOpenCodeProvider() {
-        let factory = makeFactory()
-        let account = makeAccount(serviceType: .opencode)
-        let provider = factory.makeProvider(for: account)
-        XCTAssertTrue(provider is OpenCodeUsageProvider, "Expected OpenCodeUsageProvider but got \(type(of: provider))")
-    }
-
     func testMakeProviderForZaiReturnsZaiProvider() {
         let factory = makeFactory()
         let account = makeAccount(serviceType: .zai)

@@ -31,9 +31,6 @@ final class AuthCoordinator: ObservableObject {
     @Published var showingAPIKeyInput: Bool = false
     @Published var apiKeyInputService: ServiceType?
 
-    /// PAT input state
-    @Published var showingPATInput: Bool = false
-    @Published var patInputService: ServiceType?
 
     // MARK: Dependencies
 
@@ -97,19 +94,9 @@ final class AuthCoordinator: ObservableObject {
             isAuthenticating = false
             authenticatingAccountKey = nil
 
-        case .personalAccessToken:
-            showingPATInput = true
-            patInputService = service
+        case .personalAccessToken, .none:
             isAuthenticating = false
             authenticatingAccountKey = nil
-
-        case .none:
-            // For services like Cursor/OpenCode - auto-detect local files
-            let accountKey = await accountManager.registerProvisional(service: service, label: service.displayName)
-            await accountManager.activateAccount(accountKey)
-            isAuthenticating = false
-            authenticatingAccountKey = nil
-            activationCount += 1
 
         case .importFromCLI:
             await importFromCodexCLI(service: service)
@@ -265,28 +252,6 @@ final class AuthCoordinator: ObservableObject {
         showingAPIKeyInput = false
         apiKeyInputService = nil
         AppLogger.log("[AuthCoordinator] API key saved for \(service)")
-    }
-
-    /// Called when user submits a PAT from the input view.
-    func submitPAT(_ token: String, for service: ServiceType) async {
-        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-
-        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        let accountKey = await accountManager.registerProvisional(service: service, label: service.displayName)
-
-        let material = CredentialMaterial(
-            cookies: nil,
-            authorizationHeader: "token \(trimmedToken)",
-            userAgent: nil,
-            capturedAt: Date(),
-            expiresAt: nil
-        )
-
-        await credentialStore.save(for: accountKey, material: material)
-        await accountManager.activateAccount(accountKey)
-        activationCount += 1
-        showingPATInput = false
-        patInputService = nil
     }
 
     // MARK: Account label resolution

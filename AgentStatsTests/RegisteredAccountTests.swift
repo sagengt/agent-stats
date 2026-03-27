@@ -19,7 +19,7 @@ final class RegisteredAccountTests: XCTestCase {
             RegisteredAccount(key: key2, label: "My Gemini", registeredAt: registeredAt),
         ]
         snapshot.provisionalAccounts = [
-            RegisteredAccount(key: AccountKey(serviceType: .cursor, accountId: "prov-001"),
+            RegisteredAccount(key: AccountKey(serviceType: .zai, accountId: "prov-001"),
                               label: "Provisional Cursor",
                               registeredAt: registeredAt),
         ]
@@ -69,7 +69,7 @@ final class RegisteredAccountTests: XCTestCase {
     // MARK: - TombstonedAccount preserves lastKnownLabel
 
     func testTombstonedAccountPreservesLastKnownLabel() throws {
-        let key = AccountKey(serviceType: .copilot, accountId: "tomb-001")
+        let key = AccountKey(serviceType: .gemini, accountId: "tomb-001")
         let label = "GitHub Copilot - Work Account"
         let deletedAt = Date(timeIntervalSince1970: 1_710_000_000)
         let tomb = TombstonedAccount(key: key, lastKnownLabel: label, deletedAt: deletedAt)
@@ -116,7 +116,7 @@ final class RegisteredAccountTests: XCTestCase {
     // MARK: - RegisteredAccount Identifiable
 
     func testRegisteredAccountIdEqualsKey() {
-        let key = AccountKey(serviceType: .cursor, accountId: "cursor-id-42")
+        let key = AccountKey(serviceType: .zai, accountId: "cursor-id-42")
         let account = RegisteredAccount(key: key, label: "Cursor Dev", registeredAt: Date())
         XCTAssertEqual(account.id, key)
     }
