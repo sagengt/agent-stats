@@ -219,10 +219,11 @@ private struct ServiceProviderSection: View {
 
     private func authMethodDescription(for service: ServiceType) -> String {
         switch ServiceCatalog.authMethod(for: service) {
-        case .oauthWebView:       return "Sign in via web"
+        case .oauthWebView:        return "Sign in via web"
         case .personalAccessToken: return "Personal access token"
-        case .apiKey:             return "API key"
-        case .none:               return "No authentication required"
+        case .apiKey:              return "API key"
+        case .none:                return "No authentication required"
+        case .importFromCLI:       return "Import from CLI"
         }
     }
 }

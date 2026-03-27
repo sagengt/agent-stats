@@ -110,6 +110,11 @@ final class AuthCoordinator: ObservableObject {
             isAuthenticating = false
             authenticatingAccountKey = nil
             activationCount += 1
+
+        case .importFromCLI:
+            await importFromCodexCLI(service: service)
+            isAuthenticating = false
+            authenticatingAccountKey = nil
         }
     }
 
@@ -195,6 +200,47 @@ final class AuthCoordinator: ObservableObject {
             showingAPIKeyInput = true
             apiKeyInputService = service
         }
+    }
+
+    /// Imports Codex credentials from ~/.codex/auth.json.
+    private func importFromCodexCLI(service: ServiceType) async {
+        guard let codexCred = CodexCredential.fromAuthJson() else {
+            authError = "Could not read ~/.codex/auth.json. Make sure the Codex CLI is installed and you are signed in."
+            AppLogger.log("[AuthCoordinator] Codex auth.json not found or invalid")
+            return
+        }
+
+        // Check for duplicate account (same chatgptAccountId already registered)
+        let existing = await accountManager.allAccounts()
+        if existing.contains(where: {
+            $0.key.serviceType == service &&
+            $0.key.accountId == codexCred.chatgptAccountId
+        }) {
+            authError = "This Codex account (\(codexCred.email ?? codexCred.chatgptAccountId)) is already registered."
+            AppLogger.log("[AuthCoordinator] Codex account already registered: \(codexCred.chatgptAccountId)")
+            return
+        }
+
+        let label = codexCred.email ?? service.displayName
+        let accountKey = AccountKey(serviceType: service, accountId: codexCred.chatgptAccountId)
+
+        // Register using the stable chatgptAccountId as accountId
+        await accountManager.registerWithKey(accountKey, label: label)
+
+        let encoded = try? JSONEncoder().encode(codexCred)
+        let material = CredentialMaterial(
+            cookies: nil,
+            authorizationHeader: nil,
+            userAgent: nil,
+            capturedAt: Date(),
+            expiresAt: codexCred.expiresAt,
+            providerMetadata: encoded
+        )
+
+        await credentialStore.save(for: accountKey, material: material)
+        await accountManager.activateAccount(accountKey)
+        activationCount += 1
+        AppLogger.log("[AuthCoordinator] Codex account imported: \(label)")
     }
 
     /// Called when user submits an API key from the input view.
@@ -290,20 +336,13 @@ final class AuthCoordinator: ObservableObject {
                 }
 
             case .codex:
-                // Try reading email from ~/.codex/auth.json JWT first
-                if let label = readCodexEmailFromAuthJson() {
-                    AppLogger.log("[AuthCoordinator] Resolved Codex label from auth.json: \(label)")
-                    await accountManager.updateLabel(for: key, label: label)
-                } else {
-                    // Fallback: try API
-                    let url = URL(string: "https://chatgpt.com/backend-api/me")!
-                    let data = try await apiClient.fetchRaw(from: url, headers: headers)
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        let email = json["email"] as? String
-                        let name = json["name"] as? String
-                        let label = email ?? name ?? key.serviceType.displayName
-                        await accountManager.updateLabel(for: key, label: label)
-                    }
+                // Resolve label from stored CodexCredential metadata
+                if let cred = await credentialStore.load(for: key),
+                   let metaData = cred.providerMetadata,
+                   let codexCred = try? JSONDecoder().decode(CodexCredential.self, from: metaData),
+                   let email = codexCred.email {
+                    AppLogger.log("[AuthCoordinator] Resolved Codex label from stored credential: \(email)")
+                    await accountManager.updateLabel(for: key, label: email)
                 }
 
             default:
@@ -313,35 +352,6 @@ final class AuthCoordinator: ObservableObject {
             AppLogger.log("[AuthCoordinator] Could not resolve account label: \(error.localizedDescription)")
             // Non-fatal — keep the default label.
         }
-    }
-
-    /// Reads user email from ~/.codex/auth.json by decoding the JWT id_token.
-    private func readCodexEmailFromAuthJson() -> String? {
-        let path = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/auth.json").path
-        guard let data = FileManager.default.contents(atPath: path),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tokens = json["tokens"] as? [String: Any],
-              let idToken = tokens["id_token"] as? String else {
-            return nil
-        }
-        // Decode JWT payload (second segment, URL-safe base64)
-        let parts = idToken.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-        // Convert URL-safe base64 to standard base64
-        var base64 = String(parts[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        // Pad to multiple of 4
-        while base64.count % 4 != 0 { base64 += "=" }
-        guard let payloadData = Data(base64Encoded: base64),
-              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
-            AppLogger.log("[AuthCoordinator] Failed to decode Codex JWT")
-            return nil
-        }
-        let email = payload["email"] as? String ?? payload["name"] as? String
-        AppLogger.log("[AuthCoordinator] Codex JWT email: \(email ?? "nil")")
-        return email
     }
 
     // MARK: Private helpers

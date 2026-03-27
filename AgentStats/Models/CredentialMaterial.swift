@@ -75,6 +75,29 @@ struct CredentialMaterial: Sendable, Codable {
     /// service did not communicate an expiry, or it is unknown.
     let expiresAt: Date?
 
+    /// Arbitrary provider-specific metadata encoded as JSON `Data`.
+    /// Used by providers that need to store structured credential objects
+    /// beyond the standard cookie/header/UA fields (e.g. `CodexCredential`).
+    let providerMetadata: Data?
+
+    // MARK: Init
+
+    init(
+        cookies: [CookieDTO]?,
+        authorizationHeader: String?,
+        userAgent: String?,
+        capturedAt: Date,
+        expiresAt: Date?,
+        providerMetadata: Data? = nil
+    ) {
+        self.cookies = cookies
+        self.authorizationHeader = authorizationHeader
+        self.userAgent = userAgent
+        self.capturedAt = capturedAt
+        self.expiresAt = expiresAt
+        self.providerMetadata = providerMetadata
+    }
+
     // MARK: Derived helpers
 
     /// `true` when `expiresAt` is set and is in the past.

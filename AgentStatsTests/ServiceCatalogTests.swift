@@ -15,14 +15,13 @@ final class ServiceCatalogTests: XCTestCase {
         XCTAssertEqual(url.absoluteString, "https://claude.ai")
     }
 
-    func testAuthMethodForCodexReturnsOAuthWebView() {
+    func testAuthMethodForCodexReturnsImportFromCLI() {
         let method = ServiceCatalog.authMethod(for: .codex)
 
-        guard case .oauthWebView(let url) = method else {
-            XCTFail("Expected .oauthWebView but got \(method)")
+        guard case .importFromCLI = method else {
+            XCTFail("Expected .importFromCLI but got \(method)")
             return
         }
-        XCTAssertEqual(url.absoluteString, "https://chatgpt.com")
     }
 
     // MARK: - authMethod(for:) — API key services

@@ -15,4 +15,7 @@ enum AuthMethod: Sendable {
     /// No authentication is required; the service is publicly accessible or
     /// credentials are handled transparently (e.g. via system keychain).
     case none
+
+    /// Credentials are imported from a local CLI auth file (e.g. ~/.codex/auth.json).
+    case importFromCLI
 }

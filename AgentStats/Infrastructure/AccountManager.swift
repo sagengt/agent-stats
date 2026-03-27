@@ -39,6 +39,15 @@ actor AccountManager {
 
     // MARK: - Registration
 
+    /// Registers an account using a caller-supplied `AccountKey` (e.g. with a
+    /// stable provider-specific ID) and places it directly into the provisional
+    /// list. Use `activateAccount(_:)` to promote it to active.
+    func registerWithKey(_ key: AccountKey, label: String) async {
+        let account = RegisteredAccount(key: key, label: label, registeredAt: Date())
+        snapshot.provisionalAccounts.append(account)
+        persistSnapshot()
+    }
+
     /// Creates a provisional account for `service` with the given human-readable
     /// `label` and returns its `AccountKey`.
     ///

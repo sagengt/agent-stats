@@ -16,7 +16,7 @@ struct ServiceCatalog: Sendable {
         case .claude:
             return .oauthWebView(loginURL: URL(string: "https://claude.ai")!)
         case .codex:
-            return .oauthWebView(loginURL: URL(string: "https://chatgpt.com")!)
+            return .importFromCLI
         case .gemini:
             return .apiKey
         case .copilot:
