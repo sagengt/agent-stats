@@ -88,11 +88,10 @@ struct MenuBarContentView: View {
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(viewModel.resultsByService, id: \.serviceType) { group in
-                    let showAccountLabel = group.results.count > 1
                     ForEach(group.results) { result in
                         ServiceRowView(
                             result: result,
-                            accountLabel: showAccountLabel ? viewModel.label(for: result.accountKey) : nil
+                            accountLabel: viewModel.label(for: result.accountKey)
                         )
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
