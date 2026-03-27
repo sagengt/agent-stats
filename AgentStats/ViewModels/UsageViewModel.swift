@@ -44,6 +44,7 @@ final class UsageViewModel: ObservableObject {
         self.orchestrator = orchestrator
         self.accountManager = accountManager
         startObserving()
+        refreshLabels()
     }
 
     deinit {
@@ -82,18 +83,27 @@ final class UsageViewModel: ObservableObject {
     /// Returns the human-readable label for the account identified by `key`.
     ///
     /// Looks up the label synchronously from the cached results by matching
-    /// the `accountKey` against `results`. Falls back to the service display
-    /// name when the account is not found in the current result set.
+    /// Cached account labels, refreshed alongside results.
+    @Published var accountLabels: [AccountKey: String] = [:]
+
+    /// Returns the label for `key`, using the cached value or falling back to service name.
     func label(for key: AccountKey) -> String {
-        // Derive a display label from the account key.
-        // Full async resolution is available via `resolvedLabel(for:)`.
-        key.serviceType.displayName
+        accountLabels[key] ?? key.serviceType.displayName
     }
 
-    /// Resolves the label for `key` from `AccountManager` asynchronously.
-    func resolvedLabel(for key: AccountKey) async -> String {
-        let accounts = await accountManager.allAccounts()
-        return accounts.first(where: { $0.key == key })?.label ?? key.serviceType.displayName
+    /// Reloads labels from AccountManager into the cache.
+    private func refreshLabels() {
+        Task {
+            let accounts = await accountManager.allAccounts()
+            var labels: [AccountKey: String] = [:]
+            for account in accounts {
+                let label = account.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !label.isEmpty {
+                    labels[account.key] = label
+                }
+            }
+            self.accountLabels = labels
+        }
     }
 
     /// Results whose display data contains at least one `.quota` entry.
@@ -154,6 +164,7 @@ final class UsageViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 AppLogger.log("[ViewModel] Received \(updatedResults.count) result(s)")
                 self.results = updatedResults
+                self.refreshLabels()
                 if let newest = updatedResults.map(\.fetchedAt).max() {
                     self.lastRefreshedAt = newest
                 }
