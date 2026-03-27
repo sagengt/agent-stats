@@ -210,21 +210,22 @@ final class AuthCoordinator: ObservableObject {
             return
         }
 
-        // Check for duplicate account (same chatgptAccountId already registered)
+        // Check for duplicate account (same chatgptUserId already registered)
         let existing = await accountManager.allAccounts()
         if existing.contains(where: {
             $0.key.serviceType == service &&
-            $0.key.accountId == codexCred.chatgptAccountId
+            $0.key.accountId == codexCred.chatgptUserId
         }) {
-            authError = "This Codex account (\(codexCred.email ?? codexCred.chatgptAccountId)) is already registered."
-            AppLogger.log("[AuthCoordinator] Codex account already registered: \(codexCred.chatgptAccountId)")
+            authError = "This Codex user (\(codexCred.email ?? codexCred.chatgptUserId)) is already registered."
+            AppLogger.log("[AuthCoordinator] Codex user already registered: \(codexCred.chatgptUserId)")
             return
         }
 
         let label = codexCred.email ?? service.displayName
-        let accountKey = AccountKey(serviceType: service, accountId: codexCred.chatgptAccountId)
+        // Use chatgptUserId (user-level, unique per person) not chatgptAccountId (org-level, shared)
+        let accountKey = AccountKey(serviceType: service, accountId: codexCred.chatgptUserId)
 
-        // Register using the stable chatgptAccountId as accountId
+        // Register using the stable chatgptUserId as accountId
         await accountManager.registerWithKey(accountKey, label: label)
 
         let encoded = try? JSONEncoder().encode(codexCred)

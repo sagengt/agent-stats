@@ -101,6 +101,7 @@ struct CodexUsageProvider: QuotaWindowProvider, CredentialRequired {
             accessToken: newAccessToken,
             refreshToken: newRefreshToken,
             chatgptAccountId: metadata.chatgptAccountId,
+            chatgptUserId: metadata.chatgptUserId,
             email: metadata.email,
             expiresAt: newExp
         )
